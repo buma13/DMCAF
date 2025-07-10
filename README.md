@@ -42,7 +42,8 @@ gantt
 ```
 
 # Tasks before Hackathon
-- [ ] Familiarize with diffusors lib. + Define interfaces for Framework (Mock functions)
-- [ ] Make DM runner work (start with one config)
-- [ ] Metrics research e.g. FID Which pertained models exists which datasets are used for
-- [ ] What exists specifically about medical images
+- [ ] Familiarize with diffusors lib. + Define interfaces for Framework (Mock functions) - Marco
+- [ ] Make DM runner work (start with one config) - Meric
+- [ ] Metrics research e.g. FID Which pertained models exists which datasets are used for - Burak
+- [ ] What exists specifically about medical images, (e.g. vector to location generation, domain shift) - Umut
+- [ ] Download checkpoints - Rayan
