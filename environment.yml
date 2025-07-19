@@ -1,0 +1,19 @@
+name: dmcaf
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pytorch=2.5.1
+  - torchvision=0.20.1
+  - torchaudio=2.5.1
+  - pytorch-cuda=11.8
+  - numpy
+  - scipy
+  - pillow
+  - pyyaml
+  - sqlite
+  - pip:
+      - tqdm

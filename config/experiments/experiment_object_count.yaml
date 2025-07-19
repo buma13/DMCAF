@@ -1,0 +1,20 @@
+experiment_id: experiment_001
+
+data_dir: to_be_defined
+conditioning_db: conditioning.db
+output_db: dm_output.db
+metrics_db: metrics.db
+
+condition_generator:
+  text_prompts: 5
+  segmentation_maps: 0
+
+dm_runner:
+  models:
+    - model_name: stable-diffusion-v1-5/stable-diffusion-v1-5
+      guidance_scale: 7.5
+      num_inference_steps: 50
+
+evaluator:
+  metrics:
+    - YOLO
