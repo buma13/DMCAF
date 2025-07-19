@@ -1,6 +1,8 @@
 # TUM MLMI - DMCAF
 
-# Time Planing
+![method](assets/architecture.png)
+
+## Time Planing
 ```mermaid
 gantt
     title Time-plan
@@ -41,7 +43,7 @@ gantt
         Final Submission: milestone, m3, 2025-09-08, 0d
 ```
 
-# Tasks before Hackathon
+## Tasks before Hackathon
 - [ ] Familiarize with diffusors lib. + Define interfaces for Framework (Mock functions) - Marco
 - [ ] Make DM runner work (start with one config) - Meric
 - [ ] Metrics research e.g. FID Which pertained models exists which datasets are used for - Burak
