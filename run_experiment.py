@@ -19,6 +19,16 @@ def run_experiment(config_path, skip_dm_runner=False, skip_eval=False):
     output_db_path = os.path.join(config['data_dir'], config['output_db'])
     metrics_db_path = os.path.join(config['data_dir'], config['metrics_db'])
 
+    # Step 1: Generate conditions
+    if not skip_condition_gen:
+        print("[Step 1] Generating conditions...")
+        cond_gen = ConditionGenerator(conditioning_db_path=conditioning_db_path)
+        cond_gen.generate_experiment(
+            experiment_id=exp_id,
+            n_text=config['condition_generator']['text_prompts'],
+            n_compositional=config['condition_generator']['compositional_prompts'],
+            n_seg=config['condition_generator']['segmentation_maps']
+        )
     condition_sets = config.get('conditioning', {}).get('condition_sets', [])
 
     # Step 1: Run DM on conditions
