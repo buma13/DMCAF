@@ -13,19 +13,36 @@ class ConditionGenerator:
         self.db_path = conditioning_db_path
         self.conn = sqlite3.connect(self.db_path)
         self._create_tables()
-        self.numbers = list(range(1, 10))
+        self.numbers = list(range(1, 5))
         # Construct path to yolo_classes.json relative to this file
         current_dir = os.path.dirname(os.path.abspath(__file__))
         json_path = os.path.join(current_dir, '..', 'assets', 'yolo_classes.json')
+        json_path_plural = os.path.join(current_dir, '..', 'assets', 'yolo_classes_plural.json')
         
         with open(json_path, 'r') as f:
             data = json.load(f)
             self.objects = list(data['class'].values())
         
-        self.backgrounds = ['school', 'mountains', 'river']
+        with open(json_path_plural, 'r') as f:
+            data_plural = json.load(f)
+            self.objects_plural = list(data_plural['class'].values())
+
+        self.singular_to_plural = dict(zip(self.objects, self.objects_plural))
+        self.relationships = ['on top of', 'above', 'below', 'to the left of', 'to the right of', 'next to']        
+        self.backgrounds = ['table', 'mountains', 'river']
 
     def _create_tables(self):
         cursor = self.conn.cursor()
+        # Check if new columns exist before altering table
+        # cursor.execute("PRAGMA table_info(conditions)")
+        # columns = [info[1] for info in cursor.fetchall()]
+        # if 'relationship' not in columns:
+        #     cursor.execute("ALTER TABLE conditions ADD COLUMN relationship TEXT")
+        # if 'object2' not in columns:
+        #     cursor.execute("ALTER TABLE conditions ADD COLUMN object2 TEXT")
+        # if 'number2' not in columns:
+        #     cursor.execute("ALTER TABLE conditions ADD COLUMN number2 INTEGER")
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS conditions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,7 +54,10 @@ class ConditionGenerator:
                 background TEXT,
                 image_path TEXT,
                 segmentation_path TEXT,
-                timestamp TEXT
+                timestamp TEXT,
+                relationship TEXT,
+                object2 TEXT,
+                number2 INTEGER
             )
         """)
         cursor.execute("""
@@ -51,11 +71,12 @@ class ConditionGenerator:
         """)
         self.conn.commit()
 
-    def generate_experiment(self, experiment_id: str, n_text: int, n_seg: int) -> List[Dict]:
+    def generate_experiment(self, experiment_id: str, n_text: int, n_compositional: int, n_seg: int) -> List[Dict]:
         conditions = []
         conditions += self._generate_text_prompts(experiment_id, n_text)
+        conditions += self._generate_compositional_prompts(experiment_id, n_compositional)
         conditions += self._generate_segmentation_maps(experiment_id, n_seg)
-        self._log_metadata(experiment_id, n_text, n_seg)
+        self._log_metadata(experiment_id, n_text + n_compositional, n_seg)
         return conditions
 
     def _generate_text_prompts(self, experiment_id: str, count: int) -> List[Dict]:
@@ -64,19 +85,70 @@ class ConditionGenerator:
         conditions = []
         for _ in range(count):
             number = random.choice(self.numbers)
-            obj = random.choice(self.objects)
+            obj_singular = random.choice(self.objects)
             bg = random.choice(self.backgrounds)
-            prompt = f"{number} {obj} in front of the {bg}"
+            obj_display = self.singular_to_plural[obj_singular] if number > 1 else obj_singular
+            prompt = f"{number} {obj_display} in front of the {bg}"
             cursor.execute("""
                 INSERT INTO conditions (experiment_id, type, prompt, number, object, background, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (experiment_id, "text_prompt", prompt, number, obj, bg, timestamp))
+            """, (experiment_id, "text_prompt", prompt, number, obj_singular, bg, timestamp))
             conditions.append({
                 "experiment_id": experiment_id,
                 "type": "text_prompt",
                 "prompt": prompt,
                 "number": number,
-                "object": obj,
+                "object": obj_singular,
+                "background": bg,
+                "timestamp": timestamp
+            })
+        self.conn.commit()
+        return conditions
+    
+    def _generate_compositional_prompts(self, experiment_id: str, count: int) -> List[Dict]:
+        """
+        Generates compositional prompts and stores their components in the database.
+        """
+        cursor = self.conn.cursor()
+        timestamp = datetime.now().isoformat()
+        conditions = []
+        for _ in range(count):
+            num1 = random.choice(self.numbers)
+            obj1_singular = random.choice(self.objects)
+            num2 = random.choice(self.numbers)
+            obj2_singular = random.choice(self.objects)
+            # Ensure objects are not the same
+            while obj1_singular == obj2_singular:
+                obj2_singular = random.choice(self.objects)
+
+            obj1_display = self.singular_to_plural[obj1_singular] if num1 > 1 else obj1_singular
+            obj2_display = self.singular_to_plural[obj2_singular] if num2 > 1 else obj2_singular
+
+            relation = random.choice(self.relationships)
+            bg = random.choice(self.backgrounds)
+
+            prompt = f"{num1} {obj1_display} {relation} {num2} {obj2_display} on {bg}"
+
+            cursor.execute("""
+                INSERT INTO conditions (
+                    experiment_id, type, prompt,
+                    number, object, relationship, number2, object2, background,
+                    timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                experiment_id, "compositional_prompt", prompt,
+                num1, obj1_singular, relation, num2, obj2_singular, bg,
+                timestamp
+            ))
+            conditions.append({
+                "experiment_id": experiment_id,
+                "type": "compositional_prompt",
+                "prompt": prompt,
+                "number": num1,
+                "object": obj1_singular,
+                "relationship": relation,
+                "number2": num2,
+                "object2": obj2_singular,
                 "background": bg,
                 "timestamp": timestamp
             })

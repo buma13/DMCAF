@@ -27,6 +27,7 @@ def run_experiment(config_path, skip_condition_gen=False, skip_dm_runner=False, 
         cond_gen.generate_experiment(
             experiment_id=exp_id,
             n_text=config['condition_generator']['text_prompts'],
+            n_compositional=config['condition_generator']['compositional_prompts'],
             n_seg=config['condition_generator']['segmentation_maps']
         )
 

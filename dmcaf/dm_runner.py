@@ -37,7 +37,7 @@ class DMRunner:
         cursor = self.conditioning_conn.cursor()
         cursor.execute("""
             SELECT id, prompt FROM conditions
-            WHERE experiment_id = ? AND type = 'text_prompt'
+            WHERE experiment_id = ?
         """, (experiment_id,))
         conditions = cursor.fetchall()
 
