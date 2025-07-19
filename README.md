@@ -2,6 +2,20 @@
 
 ![method](assets/architecture.png)
 
+## Setup
+We recomment [conda](https://docs.conda.io/en/latest/) for setting up the python evniorment
+
+### Prefered - Setup Based on eniroment.yml ()
+```
+conda env create -f environment.yml
+```
+
+### Alternative - Manual Setup
+```
+conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
+pip install --upgrade diffusers[torch] transformers matplotlib pyyaml pandas pytz pysqlite3
+```
+
 ## Time Planing
 ```mermaid
 gantt
