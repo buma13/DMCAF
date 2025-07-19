@@ -1,7 +1,7 @@
-# Re-import required modules and re-run implementation due to kernel reset
 import os
 import random
 import sqlite3
+import json
 from datetime import datetime
 from typing import List, Optional, Dict
 
@@ -14,7 +14,14 @@ class ConditionGenerator:
         self.conn = sqlite3.connect(self.db_path)
         self._create_tables()
         self.numbers = list(range(1, 10))
-        self.objects = ['trees', 'cats', 'buildings', 'children']
+        # Construct path to yolo_classes.json relative to this file
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        json_path = os.path.join(current_dir, '..', 'assets', 'yolo_classes.json')
+        
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+            self.objects = list(data['class'].values())
+        
         self.backgrounds = ['school', 'mountains', 'river']
 
     def _create_tables(self):

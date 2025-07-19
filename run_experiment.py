@@ -45,6 +45,7 @@ def run_experiment(config_path, skip_condition_gen=False, skip_dm_runner=False, 
     if not skip_eval:
         print("[Step 3] Evaluating outputs...")
         evaluator = Evaluator(
+            conditioning_db_path=conditioning_db_path,
             output_db_path=output_db_path,
             metrics_db_path=metrics_db_path
         )
@@ -61,6 +62,8 @@ if __name__ == "__main__":
     parser.add_argument("--skip_eval", action="store_true", help="Skip evaluation step")
 
     args = parser.parse_args()
+    os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+
 
     run_experiment(
         config_path=args.config_path,

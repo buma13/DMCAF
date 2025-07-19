@@ -3,7 +3,7 @@
 ![method](assets/architecture.png)
 
 ## Setup
-We recomment [conda](https://docs.conda.io/en/latest/) for setting up the python evniorment
+We recommend [conda](https://docs.conda.io/en/latest/) for setting up the python environment
 
 ### Prefered - Setup Based on eniroment.yml ()
 ```
@@ -12,8 +12,8 @@ conda env create -f environment.yml
 
 ### Alternative - Manual Setup
 ```
-conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
-pip install --upgrade diffusers[torch] transformers matplotlib pyyaml pandas pytz pysqlite3
+conda install pytorch torchvision torchaudio pytorch-cuda=12.8 -c pytorch -c nvidia
+pip install --upgrade diffusers[torch] transformers matplotlib pyyaml pandas pytz pysqlite3 ultralytics
 ```
 
 ## Time Planing
@@ -63,3 +63,9 @@ gantt
 - [ ] Metrics research e.g. FID Which pertained models exists which datasets are used for - Burak
 - [ ] What exists specifically about medical images, (e.g. vector to location generation, domain shift) - Umut
 - [ ] Download checkpoints - Rayan
+
+
+- [ ] Make DMRUnner support other DMs (especially controlnet)
+- [ ] Evaluation, add object count metric, other of the shelf metrics 
+- [ ] Segmentation mask condition generator for controlnet
+- [ ] Visualization tool 

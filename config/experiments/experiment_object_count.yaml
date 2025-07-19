@@ -1,4 +1,4 @@
-experiment_id: experiment_000
+experiment_id: experiment_001
 
 data_dir: to_be_defined
 conditioning_db: conditioning.db
@@ -6,7 +6,7 @@ output_db: dm_output.db
 metrics_db: metrics.db
 
 condition_generator:
-  text_prompts: 1
+  text_prompts: 5
   segmentation_maps: 0
 
 dm_runner:
@@ -15,10 +15,6 @@ dm_runner:
       guidance_scale: 7.5
       num_inference_steps: 50
 
-    - model_name: stable-diffusion-v1-5/stable-diffusion-v1-5
-      guidance_scale: 10.0
-      num_inference_steps: 50
-
 evaluator:
   metrics:
-    - FID
+    - YOLO
