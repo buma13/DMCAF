@@ -2,4 +2,3 @@ __pycache__/
 *.py[cod]
 to_be_defined
 .gradio
-yolo*
