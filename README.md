@@ -13,7 +13,7 @@ conda env create -f environment.yml
 ### Alternative - Manual Setup
 ```
 conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
-pip install --upgrade diffusers[torch] transformers matplotlib pyyaml pandas pytz pysqlite3
+pip install --upgrade diffusers[torch] transformers matplotlib pyyaml pandas pytz
 ```
 
 ## Time Planing
