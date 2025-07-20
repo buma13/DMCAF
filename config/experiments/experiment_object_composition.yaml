@@ -5,10 +5,10 @@ conditioning_db: conditioning.db
 output_db: dm_output.db
 metrics_db: metrics.db
 
-condition_generator:
-  text_prompts: 0
-  segmentation_maps: 0
-  compositional_prompts: 10
+conditioning:
+  condition_sets:
+    - condition_set_id: condition_set_000
+      limut_numberr_of_conditions: 50
 
 dm_runner:
   models:

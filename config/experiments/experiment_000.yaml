@@ -1,13 +1,14 @@
 experiment_id: experiment_000
 
-data_dir: to_be_defined
+data_dir: /mnt/projects/mlmi/dmcaf/data
 conditioning_db: conditioning.db
 output_db: dm_output.db
 metrics_db: metrics.db
 
-condition_generator:
-  text_prompts: 1
-  segmentation_maps: 0
+conditioning:
+  condition_sets:
+    - condition_set_id: condition_set_000
+      limut_numberr_of_conditions: 1000
 
 dm_runner:
   models:
