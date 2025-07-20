@@ -16,6 +16,17 @@ conda install pytorch torchvision torchaudio pytorch-cuda=12.8 -c pytorch -c nvi
 pip install --upgrade diffusers[torch] transformers matplotlib pyyaml pandas pytz pysqlite3 ultralytics
 ```
 
+## Usage
+Create condition sets first:
+```
+python run_condition_gen.py config/condition_sets/condition_set_000.yaml
+```
+
+Run an experiment that references one or more condition sets:
+```
+python run_experiment.py config/experiments/experiment_000.yaml
+```
+
 ## Time Planing
 ```mermaid
 gantt

@@ -33,13 +33,30 @@ class DMRunner:
         """)
         self.output_conn.commit()
 
-    def run_experiment(self, experiment_id: str, model_configs: List[Dict[str, Any]]):
+    def run_experiment(self, experiment_id: str, model_configs: List[Dict[str, Any]], condition_sets: List[Dict[str, Any]] | None = None):
         cursor = self.conditioning_conn.cursor()
-        cursor.execute("""
-            SELECT id, prompt FROM conditions
-            WHERE experiment_id = ?
-        """, (experiment_id,))
-        conditions = cursor.fetchall()
+        conditions = []
+        if condition_sets:
+            for cs in condition_sets:
+                cs_id = cs["condition_set_id"]
+                limit = cs.get("limut_numberr_of_conditions")
+                if limit:
+                    cursor.execute(
+                        "SELECT id, prompt FROM conditions WHERE experiment_id = ? LIMIT ?",
+                        (cs_id, limit),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT id, prompt FROM conditions WHERE experiment_id = ?",
+                        (cs_id,),
+                    )
+                conditions.extend(cursor.fetchall())
+        else:
+            cursor.execute(
+                "SELECT id, prompt FROM conditions WHERE experiment_id = ?",
+                (experiment_id,),
+            )
+            conditions = cursor.fetchall()
 
         for config in model_configs:
             model_name = config['model_name']
