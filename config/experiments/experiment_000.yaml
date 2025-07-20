@@ -8,7 +8,9 @@ metrics_db: metrics.db
 conditioning:
   condition_sets:
     - condition_set_id: condition_set_000
-      limut_numberr_of_conditions: 1000
+      limit_number_of_conditions: 1000
+      types:
+        - text_prompt
 
 dm_runner:
   models:

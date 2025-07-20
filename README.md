@@ -80,3 +80,13 @@ gantt
 - [ ] Evaluation, add object count metric, other of the shelf metrics 
 - [ ] Segmentation mask condition generator for controlnet
 - [ ] Visualization tool 
+
+
+FILE STRUCTURE:
+    - DMCAF/
+        - assets/
+        - config/
+        - dmcaf/
+        - medical_image/
+    - models/
+    - data/ (OUTPUT_DIRECTORY)

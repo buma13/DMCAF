@@ -8,7 +8,9 @@ metrics_db: metrics.db
 conditioning:
   condition_sets:
     - condition_set_id: condition_set_000
-      limut_numberr_of_conditions: 50
+      limit_number_of_conditions: 50
+      types:
+        - compositional_prompt
 
 dm_runner:
   models:

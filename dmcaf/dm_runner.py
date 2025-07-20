@@ -39,17 +39,23 @@ class DMRunner:
         if condition_sets:
             for cs in condition_sets:
                 cs_id = cs["condition_set_id"]
-                limit = cs.get("limut_numberr_of_conditions")
+                limit = cs.get("limit_number_of_conditions")
+                # The default is to run on all types of conditions.
+                types = cs.get("types")
+
+                query = "SELECT id, prompt FROM conditions WHERE experiment_id = ?"
+                params: List[Any] = [cs_id]
+
+                if types:
+                    placeholders = ','.join('?' for _ in types)
+                    query += f" AND type IN ({placeholders})"
+                    params.extend(types)
+
                 if limit:
-                    cursor.execute(
-                        "SELECT id, prompt FROM conditions WHERE experiment_id = ? LIMIT ?",
-                        (cs_id, limit),
-                    )
-                else:
-                    cursor.execute(
-                        "SELECT id, prompt FROM conditions WHERE experiment_id = ?",
-                        (cs_id,),
-                    )
+                    query += " LIMIT ?"
+                    params.append(limit)
+
+                cursor.execute(query, tuple(params))
                 conditions.extend(cursor.fetchall())
         else:
             cursor.execute(

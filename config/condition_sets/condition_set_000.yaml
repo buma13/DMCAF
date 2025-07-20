@@ -5,5 +5,5 @@ conditioning_db: conditioning.db
 
 condition_generator:
   text_prompts: 10
-  compositional_prompts: 0
+  compositional_prompts: 10
   segmentation_maps: 0

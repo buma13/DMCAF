@@ -33,15 +33,6 @@ class ConditionGenerator:
 
     def _create_tables(self):
         cursor = self.conn.cursor()
-        # Check if new columns exist before altering table
-        # cursor.execute("PRAGMA table_info(conditions)")
-        # columns = [info[1] for info in cursor.fetchall()]
-        # if 'relationship' not in columns:
-        #     cursor.execute("ALTER TABLE conditions ADD COLUMN relationship TEXT")
-        # if 'object2' not in columns:
-        #     cursor.execute("ALTER TABLE conditions ADD COLUMN object2 TEXT")
-        # if 'number2' not in columns:
-        #     cursor.execute("ALTER TABLE conditions ADD COLUMN number2 INTEGER")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS conditions (
