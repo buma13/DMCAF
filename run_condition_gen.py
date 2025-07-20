@@ -20,7 +20,8 @@ def run_condition_generation(config_path: str):
         experiment_id=config['condition_set_id'],
         n_text=cg_cfg.get('text_prompts', 0),
         n_compositional=cg_cfg.get('compositional_prompts', 0),
-        n_seg=cg_cfg.get('segmentation_maps', 0)
+        n_seg=cg_cfg.get('segmentation_maps', 0),
+        n_color=cg_cfg.get('color_prompts', 0)
     )
 
 

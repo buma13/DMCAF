@@ -16,7 +16,7 @@ class ObjectColorClassifier:
             data = json.load(f)
             self.colors = list(data['colors'])
         
-    def classify_color(self, image, object_name):
+    def classify_color(self, image, object_name='object'):
         color_texts = [f"a photo of a {color} {object_name}" for color in self.colors]
         inputs = self.processor(
             text=color_texts,

@@ -16,16 +16,21 @@ class ConditionGenerator:
         self.numbers = list(range(1, 5))
         # Construct path to yolo_classes.json relative to this file
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        json_path = os.path.join(current_dir, '..', 'assets', 'yolo_classes.json')
-        json_path_plural = os.path.join(current_dir, '..', 'assets', 'yolo_classes_plural.json')
+        classes_json_path = os.path.join(current_dir, '..', 'assets', 'yolo_classes.json')
+        classes_json_path_plural = os.path.join(current_dir, '..', 'assets', 'yolo_classes_plural.json')
+        colors_json_path = os.path.join(current_dir, '..', 'assets', 'colors.json')
         
-        with open(json_path, 'r') as f:
+        with open(classes_json_path, 'r') as f:
             data = json.load(f)
             self.objects = list(data['class'].values())
         
-        with open(json_path_plural, 'r') as f:
+        with open(classes_json_path_plural, 'r') as f:
             data_plural = json.load(f)
             self.objects_plural = list(data_plural['class'].values())
+
+        with open(colors_json_path, 'r') as f:
+            data_colors = json.load(f)
+            self.colors = data_colors['colors']
 
         self.singular_to_plural = dict(zip(self.objects, self.objects_plural))
         self.relationships = ['on top of', 'above', 'below', 'to the left of', 'to the right of', 'next to']        
@@ -42,12 +47,14 @@ class ConditionGenerator:
                 prompt TEXT,
                 number INTEGER,
                 object TEXT,
+                color1 TEXT,
                 background TEXT,
                 image_path TEXT,
                 segmentation_path TEXT,
                 timestamp TEXT,
                 relationship TEXT,
                 object2 TEXT,
+                color2 TEXT,
                 number2 INTEGER
             )
         """)
@@ -62,12 +69,13 @@ class ConditionGenerator:
         """)
         self.conn.commit()
 
-    def generate_experiment(self, experiment_id: str, n_text: int, n_compositional: int, n_seg: int) -> List[Dict]:
+    def generate_experiment(self, experiment_id: str, n_text: int, n_compositional: int, n_seg: int, n_color: int) -> List[Dict]:
         conditions = []
         conditions += self._generate_text_prompts(experiment_id, n_text)
         conditions += self._generate_compositional_prompts(experiment_id, n_compositional)
         conditions += self._generate_segmentation_maps(experiment_id, n_seg)
-        self._log_metadata(experiment_id, n_text + n_compositional, n_seg)
+        conditions += self._generate_color_prompts(experiment_id, n_color)
+        self._log_metadata(experiment_id, n_text + n_compositional + n_color, n_seg)
         return conditions
 
     def _generate_text_prompts(self, experiment_id: str, count: int) -> List[Dict]:
@@ -90,6 +98,33 @@ class ConditionGenerator:
                 "prompt": prompt,
                 "number": number,
                 "object": obj_singular,
+                "background": bg,
+                "timestamp": timestamp
+            })
+        self.conn.commit()
+        return conditions
+
+    def _generate_color_prompts(self, experiment_id: str, count: int) -> List[Dict]:
+        cursor = self.conn.cursor()
+        timestamp = datetime.now().isoformat()
+        conditions = []
+        for _ in range(count):
+            number = 1
+            color = random.choice(self.colors)['name']
+            obj_singular = random.choice(self.objects)
+            bg = random.choice(self.backgrounds)
+            prompt = f"A {color} {obj_singular} in front of the {bg}"
+            cursor.execute("""
+                INSERT INTO conditions (experiment_id, type, prompt, number, object, color1, background, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (experiment_id, "color_prompt", prompt, number, obj_singular, color, bg, timestamp))
+            conditions.append({
+                "experiment_id": experiment_id,
+                "type": "text_prompt",
+                "prompt": prompt,
+                "number": number,
+                "object": obj_singular,
+                "color1": color,
                 "background": bg,
                 "timestamp": timestamp
             })
