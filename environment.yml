@@ -17,3 +17,5 @@ dependencies:
   - sqlite
   - pip:
       - tqdm
+      - ultralytics
+      - opencv-python
