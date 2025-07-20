@@ -85,6 +85,10 @@ if __name__ == "__main__":
 
     if remove_background:
         # call remove_background method
+        detector = ObjectCounter()
+        bounding_boxes = detector.detect_objects_with_boxes(image_path)
+
+        exit(0)
 
         segments = segmenter.segment_objects_in_image(image_path)
         segmenter.remove_background(image_path, segments, output_path="foreground.png")
