@@ -2,3 +2,8 @@ __pycache__/
 *.py[cod]
 to_be_defined
 .gradio
+
+# Ignore Datasets and Checkpoints directories under medical_image/
+medical_image/Datasets/
+medical_image/Checkpoints/
+.idea
