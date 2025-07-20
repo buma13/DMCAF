@@ -2,4 +2,4 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 pip install -r requirements.txt
 export HF_HOME="/mnt/projects/mlmi/dmcaf/models/hf_home"
 export TORCH_HOME="/mnt/projects/mlmi/dmcaf/models/torch_home"
-export MONAI_DATA_DIRECTORY="/mnt/projects/mlmi/dmcaf/models/monai_home"
+export MONAI_DATA_DIRECTORY="/mnt/projects/mlmi/dmcaf/models/monai_home/datasets"
