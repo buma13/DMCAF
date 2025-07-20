@@ -1,0 +1,23 @@
+# Save this as environment.yml
+name: dmcaf_fixed
+channels:
+  - nvidia
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch=2.2.2
+  - torchvision=0.17.2
+  - torchaudio=2.2.2
+  - pytorch-cuda=12.1  # Officially supports Ada GPUs
+  - pip
+  - numpy<2.0
+  - scipy
+  - pillow
+  - pyyaml
+  - pip:
+      - tqdm
+      - opencv-python
+      - ultralytics
+      - accelerate
