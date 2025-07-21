@@ -35,7 +35,7 @@ def text_under_image(image: np.ndarray, text: str, text_color: Tuple[int, int, i
     return img
 
 
-def view_images(images, num_rows=1, offset_ratio=0.02, save_path= True):
+def view_images(images, num_rows=1, offset_ratio=0.02, save_path= ""):
     if type(images) is list:
         num_empty = len(images) % num_rows
     elif images.ndim == 4:
@@ -59,22 +59,8 @@ def view_images(images, num_rows=1, offset_ratio=0.02, save_path= True):
                 i * num_cols + j]
 
     pil_img = Image.fromarray(image_)
-    if save_path:
-        # Create output directory if it doesn't exist
-        output_dir = "viz_output"
-        os.makedirs(output_dir, exist_ok=True)
-
-        # Find next available filename
-        existing = [
-            int(f.split("-")[-1].split(".")[0])
-            for f in os.listdir(output_dir)
-            if f.startswith("generated_image-") and f.endswith(".png")
-        ]
-        next_id = max(existing, default=0) + 1
-        filename = f"generated_image-{next_id}.png"
-        pil_img.save(os.path.join(output_dir, filename))
-        print(f"Saved to {os.path.join(output_dir, filename)}")
-    display(pil_img)
+    return pil_img
+    
 
 
 def diffusion_step(model, controller, latents, context, t, guidance_scale, low_resource=False):

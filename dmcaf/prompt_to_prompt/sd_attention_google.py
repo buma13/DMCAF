@@ -231,7 +231,7 @@ def aggregate_attention(attention_store: AttentionStore, res: int, from_where: L
     return out.cpu()
 
 
-def show_cross_attention(attention_store: AttentionStore, res: int, from_where: List[str], select: int = 0, tokenizer: Optional[Callable] = None, prompts: Optional[List[str]] = None):
+def show_cross_attention(attention_store: AttentionStore, res: int, from_where: List[str], select: int = 0, tokenizer: Optional[Callable] = None, prompts: Optional[List[str]] = None, output_dir: Optional[str] = None):
     tokens = tokenizer.encode(prompts[select])
     decoder = tokenizer.decode
     attention_maps = aggregate_attention(attention_store, res, from_where, True, select, prompts)
@@ -244,7 +244,7 @@ def show_cross_attention(attention_store: AttentionStore, res: int, from_where: 
         image = np.array(Image.fromarray(image).resize((256, 256)))
         image = ptp_utils.text_under_image(image, decoder(int(tokens[i])))
         images.append(image)
-    ptp_utils.view_images(np.stack(images, axis=0))
+    return images
     
 
 def show_self_attention_comp(attention_store: AttentionStore, res: int, from_where: List[str],
@@ -264,37 +264,13 @@ def show_self_attention_comp(attention_store: AttentionStore, res: int, from_whe
 
 
 
-def run_and_display(ldm_stable, prompts, controller, latent=None, run_baseline=False,num_inference_steps =50, guidance_scale=7.5, generator=None,low_resource=False):
+def run_and_display(ldm_stable, prompts, controller, latent=None, run_baseline=False,num_inference_steps =50, guidance_scale=7.5, generator=None,low_resource=False, output_dir=None):
     if run_baseline:
         #print("w.o. prompt-to-prompt")
         #images, latent = run_and_display(prompts, EmptyControl(), latent=latent, run_baseline=False, generator=generator)
         print("with prompt-to-prompt")
     
     images, x_t = ptp_utils.text2image_ldm_stable(ldm_stable, prompts, controller, latent=latent, num_inference_steps=num_inference_steps, guidance_scale=guidance_scale, generator=generator, low_resource=low_resource)
-    ptp_utils.view_images(images)
+    #ptp_utils.view_images(images, num_rows=1, offset_ratio=0.02, save_path=output_dir)
     return images, x_t
 
-"""
-MY_TOKEN= "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"
-LOW_RESOURCE = False 
-NUM_DIFFUSION_STEPS = 50
-GUIDANCE_SCALE = 7.5
-MAX_NUM_WORDS = 77
-device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
-#ldm_stable = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", use_auth_token=MY_TOKEN).to(device)
-
-pipe = DiffusionPipeline.from_pretrained("stabilityai/stable-diffusion-2-base", variant="fp16")
-
-pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
-pipe = pipe.to("cuda")
-ldm_stable = pipe
-tokenizer = ldm_stable.tokenizer
-"""
-
-
-'''g_cpu = torch.Generator().manual_seed(8888)
-prompts = ["mri of a brain with a tumor, high quality"]
-controller = AttentionStore()
-image, x_t = run_and_display(prompts, controller, latent=None, run_baseline=False, generator=g_cpu)
-show_cross_attention(controller, res=16, from_where=("up", "down"))
-'''
