@@ -1,0 +1,10 @@
+condition_set_id: condition_set_000
+
+data_dir: /mnt/projects/mlmi/dmcaf/data
+conditioning_db: conditioning.db
+
+condition_generator:
+  text_prompts: 10
+  compositional_prompts: 10
+  color_prompts: 10 
+  segmentation_maps: 0

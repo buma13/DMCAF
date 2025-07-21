@@ -1,4 +1,4 @@
-experiment_id: experiment_001
+experiment_id: experiment_002
 
 data_dir: to_be_defined
 conditioning_db: conditioning.db
@@ -8,9 +8,9 @@ metrics_db: metrics.db
 conditioning:
   condition_sets:
     - condition_set_id: condition_set_000
-      limit_number_of_conditions: 100
+      limit_number_of_conditions: 50
       types:
-        - text_prompt
+        - compositional_prompt
 
 dm_runner:
   models:
@@ -20,4 +20,4 @@ dm_runner:
 
 evaluator:
   metrics:
-    - YOLO Count
+    - YOLO Composition

@@ -1,7 +1,7 @@
 import ultralytics
 from ultralytics import YOLO
 import cv2
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 class ObjectCounter:
     def __init__(self, model_path='yolo11n.pt'):
@@ -34,6 +34,28 @@ class ObjectCounter:
         else:
             # Count all detected objects
             return len(result.boxes)
+    
+    def detect_objects_with_boxes(self, image_path: str, target_object: str=None) -> List[Dict[str, Any]]:
+        """
+        Detects objects in an image and returns their class names and bounding boxes.
+        """
+        if cv2.imread(image_path) is None:
+            print(f"Warning: Image at path {image_path} could not be loaded.")
+            return []
+        
+        results = self.model.predict(image_path, verbose=False, save=True)
+        result = results[0]
+        
+        detections = []
+        for box in result.boxes:
+            class_name = self.model.names[int(box.cls)]
+            if target_object and class_name != target_object:
+                continue
+            # Bounding box format [x1, y1, x2, y2]
+            coordinates = box.xyxy[0].tolist()
+            detections.append({'class_name': class_name, 'box': coordinates})
+            
+        return detections
 
 
 __main__ = "__main__"

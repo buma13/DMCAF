@@ -1,12 +1,11 @@
 import yaml
 import os
 import argparse
-from dmcaf.condition_generator import ConditionGenerator
 from dmcaf.dm_runner import DMRunner
 from dmcaf.evaluator import Evaluator
 
 
-def run_experiment(config_path, skip_condition_gen=False, skip_dm_runner=False, skip_eval=False):
+def run_experiment(config_path, skip_dm_runner=False, skip_eval=False):
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
@@ -20,30 +19,21 @@ def run_experiment(config_path, skip_condition_gen=False, skip_dm_runner=False, 
     output_db_path = os.path.join(config['data_dir'], config['output_db'])
     metrics_db_path = os.path.join(config['data_dir'], config['metrics_db'])
 
-    # Step 1: Generate conditions
-    if not skip_condition_gen:
-        print("[Step 1] Generating conditions...")
-        cond_gen = ConditionGenerator(conditioning_db_path=conditioning_db_path)
-        cond_gen.generate_experiment(
-            experiment_id=exp_id,
-            n_text=config['condition_generator']['text_prompts'],
-            n_seg=config['condition_generator']['segmentation_maps']
-        )
+    condition_sets = config.get('conditioning', {}).get('condition_sets', [])
 
-    # Step 2: Run DM on conditions
+    # Step 1: Run DM on conditions
     if not skip_dm_runner:
-        print("[Step 2] Running diffusion model...")
+        print("[Step 1] Running diffusion model...")
         dm_runner = DMRunner(
             conditioning_db_path=conditioning_db_path,
             output_db_path=output_db_path,
             output_dir=os.path.join(config['data_dir'], exp_id)
         )
         model_configs = config['dm_runner']['models']
-        dm_runner.run_experiment(exp_id, model_configs)
-
-    # Step 3: Evaluate outputs
+        dm_runner.run_experiment(exp_id, model_configs, condition_sets=condition_sets)
+    # Step 2: Evaluate outputs
     if not skip_eval:
-        print("[Step 3] Evaluating outputs...")
+        print("[Step 2] Evaluating outputs...")
         evaluator = Evaluator(
             conditioning_db_path=conditioning_db_path,
             output_db_path=output_db_path,
@@ -57,7 +47,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run DMCAF experiment pipeline")
     parser.add_argument("config_path", type=str, help="Path to the experiment YAML config file")
 
-    parser.add_argument("--skip_condition_gen", action="store_true", help="Skip condition generation")
     parser.add_argument("--skip_dm_runner", action="store_true", help="Skip diffusion model execution")
     parser.add_argument("--skip_eval", action="store_true", help="Skip evaluation step")
 
@@ -67,7 +56,6 @@ if __name__ == "__main__":
 
     run_experiment(
         config_path=args.config_path,
-        skip_condition_gen=args.skip_condition_gen,
         skip_dm_runner=args.skip_dm_runner,
         skip_eval=args.skip_eval
     )
