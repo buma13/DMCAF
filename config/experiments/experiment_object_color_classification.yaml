@@ -1,0 +1,23 @@
+experiment_id: experiment_003
+
+data_dir: to_be_defined
+conditioning_db: conditioning.db
+output_db: dm_output.db
+metrics_db: metrics.db
+
+conditioning:
+  condition_sets:
+    - condition_set_id: condition_set_000
+      limit_number_of_conditions: 50
+      types:
+        - color_prompt
+
+dm_runner:
+  models:
+    - model_name: stable-diffusion-v1-5/stable-diffusion-v1-5
+      guidance_scale: 7.5
+      num_inference_steps: 50
+
+evaluator:
+  metrics:
+    - Color Classification
