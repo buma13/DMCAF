@@ -10,6 +10,8 @@ from torchvision.models import inception_v3, Inception_V3_Weights
 import torch
 from scipy.linalg import sqrtm
 from .object_count import ObjectCounter
+from .object_detection import ObjectDetector
+from .object_color_classification import ObjectColorClassifier
 
 
 class Evaluator:
@@ -56,6 +58,8 @@ class Evaluator:
             self.evaluate_object_count(experiment_id)
         if "YOLO Composition" in metrics:
             self.evaluate_object_composition(experiment_id)
+        if "Color Classification" in metrics:
+            self.evaluate_color_classification(experiment_id)
 
     def _evaluate_fid(self, experiment_id: str):
         cursor = self.output_conn.cursor()
@@ -123,6 +127,45 @@ class Evaluator:
                 experiment_id, model, gs, steps,
                 f"ObjectCountAccuracy_{target_object}", accuracy
             )
+    
+    def evaluate_color_classification(self, experiment_id: str):
+        """
+        Evaluates if the color of objects in generated images matches the expected color.
+        """
+        print(f"Evaluating Object Color Classification Accuracy for experiment: {experiment_id}")
+        color_classifier = ObjectColorClassifier()
+        output_cursor = self.output_conn.cursor()
+        cond_cursor = self.conditioning_conn.cursor()
+            
+        output_cursor.execute("""
+            SELECT condition_id, image_path, model_name, guidance_scale, num_inference_steps
+            FROM dm_outputs
+            WHERE experiment_id = ?
+        """, (experiment_id,))
+        
+        for cond_id, image_path, model, gs, steps in output_cursor.fetchall():
+            cond_cursor.execute("SELECT color, object FROM conditions WHERE id = ?", (cond_id,))
+            cond_result = cond_cursor.fetchone()
+            if not cond_result:
+                continue
+
+            expected_color, target_object = cond_result
+            if not os.path.exists(image_path):
+                print(f"Skipping non-existent image: {image_path}")
+                continue
+
+            detected_color, confidence = color_classifier.classify_color(image_path, target_object)
+
+            # Accuracy is 1 if colors match, 0 otherwise.
+            accuracy = 1.0 if detected_color == expected_color else 0.0
+            
+            print(f"Image: {os.path.basename(image_path)}, Expected: {expected_color} {target_object}, Found: {detected_color}, Accuracy: {accuracy}")
+
+            self._log_metric(
+                experiment_id, model, gs, steps,
+                f"ColorClassificationAccuracy_{target_object}", accuracy   
+            )
+
     def evaluate_object_composition(self, experiment_id: str):
         """
         Evaluates if the spatial relationship between objects in generated images
