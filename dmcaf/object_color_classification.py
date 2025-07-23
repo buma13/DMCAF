@@ -15,7 +15,7 @@ class ObjectColorClassifier:
         json_path = os.path.join(current_dir, '..', 'assets', 'colors.json')
         with open(json_path, 'r') as f:
             data = json.load(f)
-            self.colors = list(data['colors'])
+            self.colors = [c['name'] for c in data['colors']]
         
     def classify_color(self, image_path, object_name='object'):
         # Detect objects in the image
@@ -25,11 +25,23 @@ class ObjectColorClassifier:
             return None, 0.0
         # Use the object with the highest confidence (most prominent object)
         best_detection = max(detections, key=lambda x: x['confidence'])
-        crop_image(input_path=image_path, box=best_detection['box'], output_path=f"cropped_{image_path}")
-        remove_image_background(input_path=f"cropped_{image_path}", output_path=f"bg_removed_{image_path}")
+
+        # Create correct paths for intermediate files
+        img_dir = os.path.dirname(image_path)
+        img_name = os.path.basename(image_path)
+        
+        # Create a subdirectory for processed images to avoid clutter
+        processed_dir = os.path.join(img_dir, "processed")
+        os.makedirs(processed_dir, exist_ok=True)
+
+        cropped_path = os.path.join(processed_dir, f"cropped_{img_name}")
+        bg_removed_path = os.path.join(processed_dir, f"bg_removed_{img_name}")
+
+        crop_image(input_path=image_path, box=best_detection['box'], output_path=cropped_path)
+        remove_image_background(input_path=cropped_path, output_path=bg_removed_path)
 
         # Load the processed image as a PIL Image
-        processed_image = Image.open(f"bg_removed_{image_path}")
+        processed_image = Image.open(bg_removed_path)
 
         color_texts = [f"a photo of a {color} {object_name}" for color in self.colors]
         inputs = self.processor(

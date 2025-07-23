@@ -144,7 +144,7 @@ class Evaluator:
         """, (experiment_id,))
         
         for cond_id, image_path, model, gs, steps in output_cursor.fetchall():
-            cond_cursor.execute("SELECT color, object FROM conditions WHERE id = ?", (cond_id,))
+            cond_cursor.execute("SELECT color1, object FROM conditions WHERE id = ?", (cond_id,))
             cond_result = cond_cursor.fetchone()
             if not cond_result:
                 continue
