@@ -117,7 +117,7 @@ class ConditionGenerator:
             number = random.choice(list(range(1, 5)))
             obj_singular = random.choice(selected_objects)
             obj_display = self.singular_to_plural[obj_singular] if number > 1 else obj_singular
-            prompt = f"{number} {obj_display} in front of unicolor background"
+            prompt = f"a photo of {number} {obj_display} in front of unicolor background"
             cursor.execute("""
                 INSERT INTO conditions (experiment_id, type, prompt, number, object, background, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
