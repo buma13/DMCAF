@@ -8,3 +8,11 @@ custom_setup.sh
 medical_image/Datasets/
 medical_image/Checkpoints/
 .idea
+
+DMCAF_ENV/
+
+# Ignore Datasets and Checkpoints directories under medical_image/
+medical_image/Datasets/
+medical_image/Checkpoints/
+.idea
+*.pt

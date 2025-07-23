@@ -1,4 +1,4 @@
-experiment_id: experiment_001
+experiment_id: experiment_object_count
 
 conditioning_db: conditioning.db
 output_db: dm_output.db
@@ -9,7 +9,7 @@ conditioning:
     - condition_set_id: condition_set_000
       limit_number_of_conditions: 100
       types:
-        - text_prompt
+        - count_prompt
 
 dm_runner:
   models:

@@ -18,7 +18,7 @@ class ObjectCounter:
             print(f"Warning: Image at path {image_path} could not be loaded.")
             return 0
         # Perform inference
-        results = self.model.predict(image_path, verbose=False)
+        results = self.model.predict(image_path, verbose=False, save=True)
 
         print(f"Detected {len(results)} results for image {image_path}")
         result = results[0]
