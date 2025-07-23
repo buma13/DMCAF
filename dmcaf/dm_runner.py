@@ -75,9 +75,9 @@ class DMRunner:
             vae_name = config.get('vae')
             scheduler_name = config.get('scheduler')
             low_resource = config.get('low_resource', False)
-            guidance_scale = config['guidance_scale']
-            num_inference_steps = config['num_inference_steps']
-            generator = torch.Generator(device="cpu").manual_seed(config.get('seed'))
+            guidance_scale = config.get('guidance_scale', 7.5)
+            num_inference_steps = config.get('num_inference_steps', 50)
+            generator = torch.Generator(device="cpu").manual_seed(config.get('seed', 42))
 
             print(f"Loading model: {model_name}")
 
