@@ -17,11 +17,21 @@ dm_runner:
     - model_name: stable-diffusion-v1-5/stable-diffusion-v1-5
       guidance_scale: 7.5
       num_inference_steps: 50
+      seed: 8888
 
     - model_name: stable-diffusion-v1-5/stable-diffusion-v1-5
       guidance_scale: 10.0
       num_inference_steps: 50
+      seed: 8888
 
 evaluator:
   metrics:
     - FID
+    
+visualizer:
+  visualize: true
+  low_resource: false
+  cross_attention:
+    res: 16
+    from_where: ["up", "down"]
+    select: 0

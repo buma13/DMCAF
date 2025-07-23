@@ -30,7 +30,8 @@ def run_experiment(config_path, skip_dm_runner=False, skip_eval=False):
             output_dir=os.path.join(config['data_dir'], exp_id)
         )
         model_configs = config['dm_runner']['models']
-        dm_runner.run_experiment(exp_id, model_configs, condition_sets=condition_sets)
+        visualizer_configs = config['visualizer']
+        dm_runner.run_experiment(exp_id, model_configs, visualizer_configs, condition_sets=condition_sets)
     # Step 2: Evaluate outputs
     if not skip_eval:
         print("[Step 2] Evaluating outputs...")
