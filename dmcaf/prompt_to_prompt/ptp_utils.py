@@ -17,7 +17,6 @@ import torch
 from PIL import Image, ImageDraw, ImageFont
 import cv2
 from typing import Optional, Union, Tuple, List, Callable, Dict
-from IPython.display import display
 from tqdm import tqdm
 import os
 
@@ -60,7 +59,7 @@ def view_images(images, num_rows=1, offset_ratio=0.02, save_path= ""):
 
     pil_img = Image.fromarray(image_)
     return pil_img
-    
+
 
 
 def diffusion_step(model, controller, latents, context, t, guidance_scale, low_resource=False):
@@ -109,21 +108,21 @@ def text2image_ldm(
     register_attention_control(model, controller)
     height = width = 256
     batch_size = len(prompt)
-    
+
     uncond_input = model.tokenizer([""] * batch_size, padding="max_length", max_length=77, return_tensors="pt")
     uncond_embeddings = model.bert(uncond_input.input_ids.to(model.device))[0]
-    
+
     text_input = model.tokenizer(prompt, padding="max_length", max_length=77, return_tensors="pt")
     text_embeddings = model.bert(text_input.input_ids.to(model.device))[0]
     latent, latents = init_latent(latent, model, height, width, generator, batch_size)
     context = torch.cat([uncond_embeddings, text_embeddings])
-    
+
     model.scheduler.set_timesteps(num_inference_steps)
     for t in tqdm(model.scheduler.timesteps):
         latents = diffusion_step(model, controller, latents, context, t, guidance_scale)
-    
+
     image = latent2image(model.vqvae, latents)
-   
+
     return image, latent
 
 
@@ -155,12 +154,12 @@ def text2image_ldm_stable(
         [""] * batch_size, padding="max_length", max_length=max_length, return_tensors="pt"
     )
     uncond_embeddings = model.text_encoder(uncond_input.input_ids.to(model.device))[0]
-    
+
     context = [uncond_embeddings, text_embeddings]
     if not low_resource:
         context = torch.cat(context)
     latent, latents = init_latent(latent, model, height, width, generator, batch_size)
-    
+
     # set timesteps
     extra_set_kwargs = {"offset": 1}
     if 'offset' in extra_set_kwargs:
@@ -170,9 +169,9 @@ def text2image_ldm_stable(
 
     for t in tqdm(model.scheduler.timesteps):
         latents = diffusion_step(model, controller, latents, context, t, guidance_scale, low_resource)
-    
+
     image = latent2image(model.vae, latents)
-  
+
     return image, latent
 
 
@@ -183,10 +182,10 @@ def register_attention_control(model, controller):
             to_out = self.to_out[0]
         else:
             to_out = self.to_out
-        
+
         def forward(hidden_states, encoder_hidden_states=None, attention_mask=None,temb=None,):
             is_cross = encoder_hidden_states is not None
-            
+
             residual = hidden_states
 
             if self.spatial_norm is not None:
@@ -272,7 +271,7 @@ def register_attention_control(model, controller):
 
     controller.num_att_layers = cross_att_count
 
-    
+
 def get_word_inds(text: str, word_place: int, tokenizer):
     split_text = text.split(" ")
     if type(word_place) is str:
