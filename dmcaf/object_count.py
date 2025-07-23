@@ -4,13 +4,13 @@ import cv2
 from typing import Optional, List, Dict, Any
 
 class ObjectCounter:
-    def __init__(self, model_path='yolo11n.pt'):
+    def __init__(self, model_path='yolo12s.pt'):
         """
         Initializes the ObjectCounter with a YOLO model.
         """
         self.model = YOLO(model_path)
 
-    def count_objects_in_image(self, image_path: str, output_path: str = None, target_object: Optional[str] = None) -> int:
+    def count_objects_in_image(self, image_path: str, target_object: Optional[str] = None) -> int:
         """
         Counts objects in an image, optionally filtering for a specific object.
         """
