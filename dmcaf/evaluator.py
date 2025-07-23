@@ -144,7 +144,7 @@ class Evaluator:
         """, (experiment_id,))
         
         for cond_id, image_path, model, gs, steps in output_cursor.fetchall():
-            cond_cursor.execute("SELECT color, object FROM conditions WHERE id = ?", (cond_id,))
+            cond_cursor.execute("SELECT color1, object FROM conditions WHERE id = ?", (cond_id,))
             cond_result = cond_cursor.fetchone()
             if not cond_result:
                 continue
@@ -172,7 +172,7 @@ class Evaluator:
         matches the compositional prompt by analyzing bounding boxes.
         """
         print(f"Evaluating Object Composition for experiment: {experiment_id}")
-        obj_counter = ObjectCounter()
+        obj_detector = ObjectDetector()
         output_cursor = self.output_conn.cursor()
         cond_cursor = self.conditioning_conn.cursor()
 
@@ -201,7 +201,7 @@ class Evaluator:
             if not os.path.exists(image_path):
                 print(f"Skipping non-existent image: {image_path}")
                 continue
-            detected_objects = obj_counter.detect_objects_with_boxes(image_path)
+            detected_objects = obj_detector.detect_objects_with_boxes(image_path)
             
             obj1_boxes = [d['box'] for d in detected_objects if d['class_name'] == obj1_singular]
             obj2_boxes = [d['box'] for d in detected_objects if d['class_name'] == obj2_singular]
