@@ -1,6 +1,5 @@
 experiment_id: experiment_002
 
-data_dir: to_be_defined
 conditioning_db: conditioning.db
 output_db: dm_output.db
 metrics_db: metrics.db

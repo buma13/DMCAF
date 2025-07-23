@@ -10,14 +10,14 @@ def run_experiment(config_path, skip_dm_runner=False, skip_eval=False):
         config = yaml.safe_load(f)
 
     # Check if data_dir exists
-    data_dir = config['data_dir']
+    data_dir = os.getenv('OUTPUT_DIRECTORY')
     if not os.path.isdir(data_dir):
-        raise FileNotFoundError(f"[ERROR] data_dir does not exist: {data_dir}")
+        raise FileNotFoundError(f"[ERROR] data_dir does not exist: {data_dir}, Is the env variable \"OUTPUT_DIRECTORY\" set correctly?")
 
     exp_id = config['experiment_id']
-    conditioning_db_path = os.path.join(config['data_dir'], config['conditioning_db'])
-    output_db_path = os.path.join(config['data_dir'], config['output_db'])
-    metrics_db_path = os.path.join(config['data_dir'], config['metrics_db'])
+    conditioning_db_path = os.path.join(data_dir, config['conditioning_db'])
+    output_db_path = os.path.join(data_dir, config['output_db'])
+    metrics_db_path = os.path.join(data_dir, config['metrics_db'])
 
     condition_sets = config.get('conditioning', {}).get('condition_sets', [])
 
@@ -27,7 +27,7 @@ def run_experiment(config_path, skip_dm_runner=False, skip_eval=False):
         dm_runner = DMRunner(
             conditioning_db_path=conditioning_db_path,
             output_db_path=output_db_path,
-            output_dir=os.path.join(config['data_dir'], exp_id)
+            output_dir=os.path.join(data_dir, exp_id)
         )
         model_configs = config['dm_runner']['models']
         visualizer_configs = config['visualizer']

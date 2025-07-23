@@ -8,9 +8,9 @@ def run_condition_generation(config_path: str):
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
-    data_dir = config['data_dir']
+    data_dir = os.getenv('OUTPUT_DIRECTORY')
     if not os.path.isdir(data_dir):
-        raise FileNotFoundError(f"[ERROR] data_dir does not exist: {data_dir}")
+        raise FileNotFoundError(f"[ERROR] data_dir does not exist: {data_dir}, Is the env variable \"OUTPUT_DIRECTORY\" set correctly?")
 
     conditioning_db_path = os.path.join(data_dir, config['conditioning_db'])
 
