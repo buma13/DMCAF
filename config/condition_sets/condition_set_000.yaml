@@ -1,6 +1,6 @@
 condition_set_id: condition_set_000
 
-data_dir: assets
+data_dir: /mnt/projects/mlmi/dmcaf/data
 conditioning_db: conditioning.db
 
 condition_generator:
