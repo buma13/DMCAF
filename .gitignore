@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 to_be_defined
 .gradio
+custom_setup.sh
 
 # Ignore Datasets and Checkpoints directories under medical_image/
 medical_image/Datasets/

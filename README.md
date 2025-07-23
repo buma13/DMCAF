@@ -3,18 +3,12 @@
 ![method](assets/architecture.png)
 
 ## Setup
-We recommend [conda](https://docs.conda.io/en/latest/) for setting up the python environment
-
-### Prefered - Setup Based on eniroment.yml ()
+To setup your environment to run DMCAF run:
 ```
-conda env create -f environment.yml
+source setup.sh
 ```
-
-### Alternative - Manual Setup
-```
-conda install pytorch torchvision torchaudio pytorch-cuda=12.8 -c pytorch -c nvidia
-pip install --upgrade diffusers[torch] transformers matplotlib pyyaml pandas pytz pysqlite3 ultralytics
-```
+As environment variables are used to define output and model cashing paths, its required to source `setup.sh` in every
+If your want to use different paths, we recommend to create a `custom_setup.sh` file and source this.
 
 ## Usage
 Create condition sets first:
@@ -58,29 +52,19 @@ gantt
         Prep. Final Slides: r1, 2025-07-21, 2w
         Finalize Report: r2, 2025-08-18, 2w
 
-    section Actual
-        Hackathon: h1, 2025-07-18, 3d
-        Final Presentation rehearsal: milestone, m3, 2025-07-31, 0d
-
     section Milestones
         Mid-Presentation: milestone, m1, 2025-06-16, 0d
         Final Presentation: milestone, m2, 2025-08-04, 0d
         Final Submission: milestone, m3, 2025-09-08, 0d
 ```
 
-## Tasks before Hackathon
-- [ ] Familiarize with diffusors lib. + Define interfaces for Framework (Mock functions) - Marco
-- [ ] Make DM runner work (start with one config) - Meric
-- [ ] Metrics research e.g. FID Which pertained models exists which datasets are used for - Burak
-- [ ] What exists specifically about medical images, (e.g. vector to location generation, domain shift) - Umut
-- [ ] Download checkpoints - Rayan
-
-
+## Tasks
 - [ ] Make DMRUnner support other DMs (especially controlnet)
-- [ ] Evaluation, add object count metric, other of the shelf metrics 
+- [ ] Evaluation, add object count metric, other of the shelf metrics
 - [ ] Segmentation mask condition generator for controlnet
-- [ ] Visualization tool 
-
+- [ ] Visualization tool
+- [ ] Evaluation: implement sores IS, CLIP
+- [ ] More Parameters for DM runner (We have: guidance scale, inference steps, add: Scheduler, Seed, Number of images, Image Dimensions, Negative Prompt (ad to condition generator vs. fixed set e.g. blurry, unrealistic))
 
 FILE STRUCTURE:
     - DMCAF/

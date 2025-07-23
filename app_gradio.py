@@ -56,7 +56,7 @@ def show_results():
 # ---- Load values from config ----
 cfg = load_yaml()
 experiment_id_val = cfg.get("experiment_id", "")
-data_dir_val = cfg.get("data_dir", "")
+data_dir_val = os.getenv('OUTPUT_DIRECTORY')
 text_prompts_val = cfg.get("condition_generator", {}).get("text_prompts", 0)
 seg_maps_val = cfg.get("condition_generator", {}).get("segmentation_maps", 0)
 models_val = yaml.dump(cfg.get("dm_runner", {}).get("models", []))
