@@ -37,18 +37,43 @@ class Evaluator:
 
     def _create_evaluation_table(self):
         cursor = self.evaluation_conn.cursor()
+        
+        # Table for per-image/per-condition raw metrics
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS evaluation_metrics (
+            CREATE TABLE IF NOT EXISTS raw_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_id TEXT,
+                condition_id INTEGER,
+                model_name TEXT,
+                guidance_scale REAL,
+                num_inference_steps INTEGER,
+                metric_type TEXT,
+                metric_name TEXT,
+                value REAL,
+                image_path TEXT,
+                timestamp TEXT
+            )
+        """)
+        
+        # Table for experiment-wide aggregated metrics
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS experiment_metrics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 experiment_id TEXT,
                 model_name TEXT,
                 guidance_scale REAL,
                 num_inference_steps INTEGER,
-                metric TEXT,
-                value REAL,
+                metric_type TEXT,
+                metric_name TEXT,
+                mean_value REAL,
+                std_value REAL,
+                min_value REAL,
+                max_value REAL,
+                count INTEGER,
                 timestamp TEXT
             )
         """)
+        
         self.evaluation_conn.commit()
 
     def evaluate_outputs(self, experiment_id: str, metrics: List[str]):
@@ -84,10 +109,10 @@ class Evaluator:
             mu_real, sigma_real = mu_gen + 0.1, sigma_gen + 0.01
 
             fid_score = self._calculate_fid(mu_real, sigma_real, mu_gen, sigma_gen)
-            self._log_metric(
+            self._log_experiment_metric(
                 experiment_id, model_name,
                 guidance_scale, num_steps,
-                "FID", fid_score
+                "Quality", "FID", fid_score
             )
 
     def evaluate_object_count(self, experiment_id: str):
@@ -123,10 +148,11 @@ class Evaluator:
             
             print(f"Image: {os.path.basename(image_path)}, Expected: {expected_number} {target_object}, Found: {detected_count}, Accuracy: {accuracy}")
 
-            self._log_metric(
-                experiment_id, model, gs, steps,
-                f"ObjectCountAccuracy_{target_object}", accuracy
+            self._log_raw_metric(
+                experiment_id, cond_id, model, gs, steps,
+                "Accuracy", f"ObjectCountAccuracy_{target_object}", accuracy, image_path
             )
+        self._compute_experiment_aggregates(experiment_id)
     
     def evaluate_color_classification(self, experiment_id: str):
         """
@@ -161,11 +187,13 @@ class Evaluator:
             
             print(f"Image: {os.path.basename(image_path)}, Expected: {expected_color} {target_object}, Found: {detected_color}, Accuracy: {accuracy}")
 
-            self._log_metric(
-                experiment_id, model, gs, steps,
-                f"ColorClassificationAccuracy_{target_object}", accuracy   
+            self._log_raw_metric(
+                experiment_id, cond_id, model, gs, steps,
+                "Accuracy", f"ColorClassificationAccuracy_{target_object}", accuracy, image_path
             )
-
+        
+        # After processing all images, compute experiment-wide aggregates
+        self._compute_experiment_aggregates(experiment_id)
     def evaluate_object_composition(self, experiment_id: str):
         """
         Evaluates if the spatial relationship between objects in generated images
@@ -223,7 +251,13 @@ class Evaluator:
             metric_name = f"CompositionalAccuracy_{obj1_singular}_{relation}_{obj2_singular}"
             print(f"Image: {os.path.basename(image_path)}, Relation: '{relation}', Accuracy: {accuracy}")
 
-            self._log_metric(experiment_id, model, gs, steps, metric_name, accuracy)
+            self._log_raw_metric(
+                experiment_id, cond_id, model, gs, steps,
+                "Accuracy", metric_name, accuracy, image_path
+            )
+        
+        # After processing all images, compute experiment-wide aggregates
+        self._compute_experiment_aggregates(experiment_id)
 
     def _check_spatial_relation(self, box1: List[float], box2: List[float], relation: str) -> bool:
         """Checks if box1 is in the correct spatial relation to box2."""
@@ -286,17 +320,70 @@ class Evaluator:
         fid = diff.dot(diff) + np.trace(sigma1 + sigma2 - 2 * covmean)
         return float(fid)
 
-    def _log_metric(self, experiment_id: str, model_name: str,
-                    guidance_scale: float, num_steps: int,
-                    metric: str, value: float):
+    def _log_raw_metric(self, experiment_id: str, condition_id: int, model_name: str,
+                        guidance_scale: float, num_steps: int, metric_type: str,
+                        metric_name: str, value: float, image_path: str):
         cursor = self.evaluation_conn.cursor()
         cursor.execute("""
-            INSERT INTO evaluation_metrics (
-                experiment_id, model_name, guidance_scale,
-                num_inference_steps, metric, value, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO raw_metrics (
+                experiment_id, condition_id, model_name, guidance_scale,
+                num_inference_steps, metric_type, metric_name, value, image_path, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            experiment_id, model_name, guidance_scale,
-            num_steps, metric, value, datetime.now().isoformat()
+            experiment_id, condition_id, model_name, guidance_scale,
+            num_steps, metric_type, metric_name, value, image_path, datetime.now().isoformat()
         ))
+        self.evaluation_conn.commit()
+
+    def _log_experiment_metric(self, experiment_id: str, model_name: str,
+                               guidance_scale: float, num_steps: int, metric_type: str,
+                               metric_name: str, value: float):
+        cursor = self.evaluation_conn.cursor()
+        cursor.execute("""
+            INSERT INTO experiment_metrics (
+                experiment_id, model_name, guidance_scale, num_inference_steps,
+                metric_type, metric_name, mean_value, std_value, min_value, max_value, count, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            experiment_id, model_name, guidance_scale, num_steps, metric_type, metric_name,
+            value, None, None, None, None, datetime.now().isoformat()
+        ))
+        self.evaluation_conn.commit()
+
+    def _compute_experiment_aggregates(self, experiment_id: str):
+        """Compute and store experiment-wide statistics from raw metrics."""
+        cursor = self.evaluation_conn.cursor()
+        
+        # Get all unique configurations for this experiment
+        cursor.execute("""
+            SELECT DISTINCT model_name, guidance_scale, num_inference_steps, metric_type, metric_name
+            FROM raw_metrics
+            WHERE experiment_id = ?
+        """, (experiment_id,))
+        
+        for model, gs, steps, metric_type, metric_name in cursor.fetchall():
+            # Calculate aggregates for this configuration and metric
+            cursor.execute("""
+                SELECT value FROM raw_metrics
+                WHERE experiment_id = ? AND model_name = ? AND guidance_scale = ? 
+                AND num_inference_steps = ? AND metric_type = ? AND metric_name = ?
+            """, (experiment_id, model, gs, steps, metric_type, metric_name))
+            
+            values = [row[0] for row in cursor.fetchall()]
+            if values:
+                mean_val = np.mean(values)
+                std_val = np.std(values)
+                min_val = np.min(values)
+                max_val = np.max(values)
+                count = len(values)
+                
+                # Insert aggregated metrics
+                cursor.execute("""
+                    INSERT INTO experiment_metrics (
+                        experiment_id, model_name, guidance_scale, num_inference_steps,
+                        metric_type, metric_name, mean_value, std_value, min_value, max_value, count, timestamp
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (experiment_id, model, gs, steps, metric_type, metric_name,
+                      mean_val, std_val, min_val, max_val, count, datetime.now().isoformat()))
+        
         self.evaluation_conn.commit()
