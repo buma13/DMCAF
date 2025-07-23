@@ -6,7 +6,7 @@ from typing import Dict, Any, List
 from PIL import Image
 import numpy as np
 import torch
-from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler
+from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler, PNDMScheduler, AutoencoderKL
 from . prompt_to_prompt.sd_attention_google import AttentionStore, show_cross_attention, run_and_display
 from . prompt_to_prompt.ptp_utils import view_images
 
@@ -69,18 +69,39 @@ class DMRunner:
                 (experiment_id,),
             )
             conditions = cursor.fetchall()
-        
+
         for config in model_configs:
             model_name = config['model_name']
+            vae_name = config.get('vae')
+            scheduler_name = config.get('scheduler')
             low_resource = config.get('low_resource', False)
             guidance_scale = config['guidance_scale']
             num_inference_steps = config['num_inference_steps']
             generator = torch.Generator(device="cpu").manual_seed(config.get('seed'))
 
             print(f"Loading model: {model_name}")
-            pipe = StableDiffusionPipeline.from_pretrained(model_name)
+
+            pipeline_kwargs = {}
+            if vae_name:
+                print(f"Loading VAE: {vae_name}")
+                pipeline_kwargs['vae'] = AutoencoderKL.from_pretrained(vae_name)
+
+            pipe = StableDiffusionPipeline.from_pretrained(model_name, **pipeline_kwargs)
             pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
-            pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+
+            if scheduler_name:
+                scheduler_class = {
+                    "DPMSolverMultistepScheduler": DPMSolverMultistepScheduler,
+                    "DDIMScheduler": DDIMScheduler,
+                    "PNDMScheduler": PNDMScheduler,
+                }.get(scheduler_name)
+
+                if scheduler_class:
+                    print(f"Using scheduler: {scheduler_name}")
+                    pipe.scheduler = scheduler_class.from_config(pipe.scheduler.config)
+                else:
+                    print(f"Warning: Scheduler '{scheduler_name}' not found. Using pipeline default.")
+
             pipe.scheduler.set_timesteps(num_inference_steps)
 
             for condition_id, prompt in conditions:
@@ -99,7 +120,7 @@ class DMRunner:
                     low_resource=low_resource,
                     output_dir=self.output_dir
                 )
-                
+
                 image = images[0]
                 image_path = self._save_image(
                     experiment_id=experiment_id,
@@ -108,7 +129,7 @@ class DMRunner:
                     image=image,
                     visualize=False,
                     guidance_scale=guidance_scale,
-                    num_inference_steps=num_inference_steps)                
+                    num_inference_steps=num_inference_steps)
                 self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path,visualize=False)
                 # If visualization is enabled, show cross-attention maps
                 if visualize:
@@ -138,7 +159,7 @@ class DMRunner:
 
     def _save_image(self, experiment_id: str, model_name: str, condition_id: int, image: Image.Image,visualize: bool,
                     guidance_scale: float, num_inference_steps: int) -> str:
-        model_tag = model_name.replace("/", "_") 
+        model_tag = model_name.replace("/", "_")
         if visualize:
             filename = f"{experiment_id}_{model_tag}_gs{guidance_scale}_steps{num_inference_steps}_cond{condition_id}_visualization.png"
         else:

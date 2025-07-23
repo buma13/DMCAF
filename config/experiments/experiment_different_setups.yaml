@@ -1,0 +1,40 @@
+experiment_id: experiment_different_setups
+
+conditioning_db: conditioning.db
+output_db: dm_output.db
+metrics_db: metrics.db
+
+conditioning:
+  condition_sets:
+    - condition_set_id: condition_set_000
+      limit_number_of_conditions: 10
+      types:
+        - text_prompt
+
+dm_runner:
+  models:
+    - model_name: runwayml/stable-diffusion-v1-5
+      scheduler: DDIMScheduler
+      vae: stabilityai/sd-vae-ft-mse
+      guidance_scale: 7.5
+      num_inference_steps: 50
+      seed: 8888  
+    - model_name: stable-diffusion-v1-5/stable-diffusion-v1-5
+      scheduler: DPMSolverMultistepScheduler
+      # Not specifying a VAE will use the default one from the pipeline
+      vae: null 
+      guidance_scale: 8.0
+      num_inference_steps: 25
+      seed: 8888
+
+evaluator:
+  metrics:
+    - FID
+    
+visualizer:
+  visualize: true
+  low_resource: false
+  cross_attention:
+    res: 16
+    from_where: ["up", "down"]
+    select: 0

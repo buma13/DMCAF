@@ -69,13 +69,14 @@ class ConditionGenerator:
         """)
         self.conn.commit()
 
-    def generate_experiment(self, experiment_id: str, n_text: int, n_compositional: int, n_seg: int, n_color: int) -> List[Dict]:
+    def generate_experiment(self, experiment_id: str, n_text: int, n_compositional: int, n_seg: int, n_color: int, n_count: int) -> List[Dict]:
         conditions = []
         conditions += self._generate_text_prompts(experiment_id, n_text)
         conditions += self._generate_compositional_prompts(experiment_id, n_compositional)
         conditions += self._generate_segmentation_maps(experiment_id, n_seg)
         conditions += self._generate_color_prompts(experiment_id, n_color)
-        self._log_metadata(experiment_id, n_text + n_compositional + n_color, n_seg)
+        conditions += self._generate_count_prompts(experiment_id, n_count)
+        self._log_metadata(experiment_id, n_text + n_compositional + n_color + n_count, n_seg)
         return conditions
 
     def _generate_text_prompts(self, experiment_id: str, count: int) -> List[Dict]:
@@ -103,6 +104,36 @@ class ConditionGenerator:
             })
         self.conn.commit()
         return conditions
+
+    def _generate_count_prompts(self, experiment_id: str, count: int) -> List[Dict]:
+        cursor = self.conn.cursor()
+        timestamp = datetime.now().isoformat()
+        conditions = []
+
+        selected_indices = list(range(39, 46))
+        selected_objects = [self.objects[i] for i in selected_indices]
+
+        for _ in range(count):
+            number = random.choice(list(range(1, 5)))
+            obj_singular = random.choice(selected_objects)
+            obj_display = self.singular_to_plural[obj_singular] if number > 1 else obj_singular
+            prompt = f"Zoomed out photo of {number} {obj_display} centered in front of unicolor background"
+            cursor.execute("""
+                INSERT INTO conditions (experiment_id, type, prompt, number, object, background, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (experiment_id, "count_prompt", prompt, number, obj_singular, "unicolor background", timestamp))
+            conditions.append({
+                "experiment_id": experiment_id,
+                "type": "count_prompt",
+                "prompt": prompt,
+                "number": number,
+                "object": obj_singular,
+                "background": "unicolor background",
+                "timestamp": timestamp
+            })
+        self.conn.commit()
+        return conditions
+    
 
     def _generate_color_prompts(self, experiment_id: str, count: int) -> List[Dict]:
         cursor = self.conn.cursor()

@@ -3,12 +3,28 @@
 ![method](assets/architecture.png)
 
 ## Setup
+We recommend working in a virtual environment for a cleaner workingspace.
 To setup your environment to run DMCAF run:
 ```
 source setup.sh
 ```
 As environment variables are used to define output and model cashing paths, its required to source `setup.sh` in every
 If your want to use different paths, we recommend to create a `custom_setup.sh` file and source this.
+
+If you are on Windows, try using powershell and running the installation commands manually:
+
+`
+pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+pip install -r requirements.txt
+`
+And then set the environment variables with the command below
+`
+$env:HF_HOME = "/mnt/projects/mlmi/dmcaf/models/hf_home"
+$env:TORCH_HOME = "/mnt/projects/mlmi/dmcaf/models/torch_home"
+$env:MONAI_DATA_DIRECTORY = "/mnt/projects/mlmi/dmcaf/models/monai_home/datasets"
+$env:YOLO_CONFIG_DIR = "/mnt/projects/mlmi/dmcaf/models/yolo_config"
+$env:OUTPUT_DIRECTORY = "/mnt/projects/mlmi/dmcaf/data"
+`
 
 ## Usage
 Create condition sets first:

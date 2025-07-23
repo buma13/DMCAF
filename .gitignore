@@ -4,7 +4,12 @@ to_be_defined
 .gradio
 custom_setup.sh
 
+DMCAF_ENV/
+outputs/
+runs/
+
 # Ignore Datasets and Checkpoints directories under medical_image/
 medical_image/Datasets/
 medical_image/Checkpoints/
 .idea
+*.pt
