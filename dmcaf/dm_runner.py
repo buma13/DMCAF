@@ -6,7 +6,7 @@ from typing import Dict, Any, List
 from PIL import Image
 import numpy as np
 import torch
-from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler, PNDMScheduler, AutoencoderKL
+from diffusers import StableDiffusionPipeline, StableDiffusion3Pipeline, DPMSolverMultistepScheduler, DDIMScheduler, PNDMScheduler, AutoencoderKL
 from . prompt_to_prompt.sd_attention_google import AttentionStore, show_cross_attention, run_and_display
 from . prompt_to_prompt.ptp_utils import view_images
 
@@ -86,7 +86,11 @@ class DMRunner:
                 print(f"Loading VAE: {vae_name}")
                 pipeline_kwargs['vae'] = AutoencoderKL.from_pretrained(vae_name)
 
-            pipe = StableDiffusionPipeline.from_pretrained(model_name, **pipeline_kwargs)
+            if "stable-diffusion-3" in model_name:
+               pipe = StableDiffusion3Pipeline.from_pretrained(model_name, torch_dtype=torch.float16)
+            else:
+                pipe = StableDiffusionPipeline.from_pretrained(model_name, **pipeline_kwargs)
+
             pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
 
             if scheduler_name:
@@ -106,22 +110,28 @@ class DMRunner:
 
             for condition_id, prompt in conditions:
                 print(f"[{model_name}] Generating: {prompt} (guidance={guidance_scale}, steps={num_inference_steps})")
-                controller = AttentionStore()
-                # inference with prompt-to-prompt
-                images, _ = run_and_display(
-                    ldm_stable=pipe,
-                    prompts=[prompt],
-                    controller=controller,
-                    latent=None,
-                    run_baseline=False,
-                    num_inference_steps=num_inference_steps,
-                    guidance_scale=guidance_scale,
-                    generator=generator,
-                    low_resource=low_resource,
-                    output_dir=self.output_dir
-                )
 
-                image = images[0]
+                if "stable-diffusion-3" in model_name:
+                    if visualize:
+                        print("Warning: visualizing corss-attention not yet supported for ViT nased models (SD3+)")
+                    image = pipe(prompt, guidance_scale=guidance_scale, num_inference_steps=num_inference_steps).images[0]
+                else:
+                    controller = AttentionStore()
+                    # inference with prompt-to-prompt
+                    images, _ = run_and_display(
+                        ldm_stable=pipe,
+                        prompts=[prompt],
+                        controller=controller,
+                        latent=None,
+                        run_baseline=False,
+                        num_inference_steps=num_inference_steps,
+                        guidance_scale=guidance_scale,
+                        generator=generator,
+                        low_resource=low_resource,
+                        output_dir=self.output_dir
+                    )
+                    image = images[0]
+
                 image_path = self._save_image(
                     experiment_id=experiment_id,
                     model_name=model_name,
