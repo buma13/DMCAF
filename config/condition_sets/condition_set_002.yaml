@@ -1,0 +1,10 @@
+condition_set_id: condition_set_002
+
+conditioning_db: conditioning.db
+
+condition_generator:
+  text_prompts: 0
+  compositional_prompts: 0
+  count_prompts: 0
+  color_prompts: 1000
+  segmentation_maps: 0
