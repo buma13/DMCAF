@@ -37,7 +37,7 @@ class Evaluator:
 
     def _create_evaluation_table(self):
         cursor = self.evaluation_conn.cursor()
-        
+
         # Table for per-image/per-condition raw metrics
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS raw_metrics (
@@ -54,7 +54,45 @@ class Evaluator:
                 timestamp TEXT
             )
         """)
-        
+
+        # Table specific for count evaluation
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS raw_count_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_id TEXT,
+                condition_id INTEGER,
+                model_name TEXT,
+                guidance_scale REAL,
+                num_inference_steps INTEGER,
+                metric_type TEXT,
+                metric_name TEXT,
+                value REAL,
+                expected_number INTEGER,
+                detected_count INTEGER,
+                image_path TEXT,
+                timestamp TEXT
+            )
+        """)
+
+                # Table specific for count evaluation
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS raw_color_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_id TEXT,
+                condition_id INTEGER,
+                model_name TEXT,
+                guidance_scale REAL,
+                num_inference_steps INTEGER,
+                metric_type TEXT,
+                metric_name TEXT,
+                value REAL,
+                expected_color TEXT,
+                detected_color TEXT,
+                image_path TEXT,
+                timestamp TEXT
+            )
+        """)
+
         # Table for experiment-wide aggregated metrics
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS experiment_metrics (
@@ -73,7 +111,7 @@ class Evaluator:
                 timestamp TEXT
             )
         """)
-        
+
         self.evaluation_conn.commit()
 
     def evaluate_outputs(self, experiment_id: str, metrics: List[str]):
@@ -129,7 +167,7 @@ class Evaluator:
             FROM dm_outputs
             WHERE experiment_id = ?
         """, (experiment_id,))
-        
+
         for cond_id, image_path, model, gs, steps in output_cursor.fetchall():
             cond_cursor.execute("SELECT number, object FROM conditions WHERE id = ?", (cond_id,))
             cond_result = cond_cursor.fetchone()
@@ -142,18 +180,22 @@ class Evaluator:
                 continue
 
             detected_count = obj_counter.count_objects_in_image(image_path, target_object)
-            
+
             # Accuracy is 1 if counts match, 0 otherwise.
             accuracy = 1.0 if detected_count == expected_number else 0.0
-            
+
             print(f"Image: {os.path.basename(image_path)}, Expected: {expected_number} {target_object}, Found: {detected_count}, Accuracy: {accuracy}")
 
             self._log_raw_metric(
                 experiment_id, cond_id, model, gs, steps,
                 "Accuracy", f"ObjectCountAccuracy_{target_object}", accuracy, image_path
             )
+            self._log_raw_count_metric(
+                experiment_id, cond_id, model, gs, steps,
+                "Accuracy", f"ObjectCountAccuracy_{target_object}", accuracy, expected_number, detected_count, image_path
+            )
         self._compute_experiment_aggregates(experiment_id)
-    
+
     def evaluate_color_classification(self, experiment_id: str):
         """
         Evaluates if the color of objects in generated images matches the expected color.
@@ -162,13 +204,13 @@ class Evaluator:
         color_classifier = ObjectColorClassifier()
         output_cursor = self.output_conn.cursor()
         cond_cursor = self.conditioning_conn.cursor()
-            
+
         output_cursor.execute("""
             SELECT condition_id, image_path, model_name, guidance_scale, num_inference_steps
             FROM dm_outputs
             WHERE experiment_id = ?
         """, (experiment_id,))
-        
+
         for cond_id, image_path, model, gs, steps in output_cursor.fetchall():
             cond_cursor.execute("SELECT color1, object FROM conditions WHERE id = ?", (cond_id,))
             cond_result = cond_cursor.fetchone()
@@ -184,14 +226,19 @@ class Evaluator:
 
             # Accuracy is 1 if colors match, 0 otherwise.
             accuracy = 1.0 if detected_color == expected_color else 0.0
-            
+
             print(f"Image: {os.path.basename(image_path)}, Expected: {expected_color} {target_object}, Found: {detected_color}, Accuracy: {accuracy}")
 
             self._log_raw_metric(
                 experiment_id, cond_id, model, gs, steps,
                 "Accuracy", f"ColorClassificationAccuracy_{target_object}", accuracy, image_path
             )
-        
+            self._log_raw_color_metric(
+                experiment_id, cond_id, model, gs, steps,
+                "Accuracy", f"ColorClassificationAccuracy_{target_object}", accuracy,
+                expected_color, detected_color, image_path
+            )
+
         # After processing all images, compute experiment-wide aggregates
         self._compute_experiment_aggregates(experiment_id)
     def evaluate_object_composition(self, experiment_id: str):
@@ -210,15 +257,15 @@ class Evaluator:
             FROM dm_outputs
             WHERE experiment_id = ?
         """, (experiment_id,))
-        
+
         for cond_id, image_path, model, gs, steps in output_cursor.fetchall():
             # For each output, check the condition type from the conditioning database.
             cond_cursor.execute("""
-                SELECT type, object, number, relationship, object2, number2 
+                SELECT type, object, number, relationship, object2, number2
                 FROM conditions WHERE id = ?
             """, (cond_id,))
             cond_result = cond_cursor.fetchone()
-            
+
             if not cond_result or cond_result[0] != 'compositional_prompt':
                 continue
 
@@ -230,7 +277,7 @@ class Evaluator:
                 print(f"Skipping non-existent image: {image_path}")
                 continue
             detected_objects = obj_detector.detect_objects_with_boxes(image_path)
-            
+
             obj1_boxes = [d['box'] for d in detected_objects if d['class_name'] == obj1_singular]
             obj2_boxes = [d['box'] for d in detected_objects if d['class_name'] == obj2_singular]
 
@@ -255,7 +302,7 @@ class Evaluator:
                 experiment_id, cond_id, model, gs, steps,
                 "Accuracy", metric_name, accuracy, image_path
             )
-        
+
         # After processing all images, compute experiment-wide aggregates
         self._compute_experiment_aggregates(experiment_id)
 
@@ -286,7 +333,7 @@ class Evaluator:
             # Check for horizontal or vertical proximity.
             is_horizontally_aligned = max(box1[1], box2[1]) < min(box1[3], box2[3])
             is_horizontally_close = abs(c1_x - c2_x) < (w1 + w2) # Allow some gap
-            
+
             is_vertically_aligned = max(box1[0], box2[0]) < min(box1[2], box2[2])
             is_vertically_close = abs(c1_y - c2_y) < (h1 + h2) # Allow some gap
 
@@ -335,6 +382,38 @@ class Evaluator:
         ))
         self.evaluation_conn.commit()
 
+    def _log_raw_count_metric(self, experiment_id: str, condition_id: int, model_name: str,
+                        guidance_scale: float, num_steps: int, metric_type: str,
+                        metric_name: str, value: float, expected_number: int, detected_count: int,
+                        image_path: str):
+        cursor = self.evaluation_conn.cursor()
+        cursor.execute("""
+            INSERT INTO raw_count_metrics (
+                experiment_id, condition_id, model_name, guidance_scale,
+                num_inference_steps, metric_type, metric_name, value, expected_number, detected_count, image_path,
+                timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            experiment_id, condition_id, model_name, guidance_scale, num_steps, metric_type,
+            metric_name, value, expected_number, detected_count, image_path, datetime.now().isoformat()
+        ))
+        self.evaluation_conn.commit()
+
+    def _log_raw_color_metric(self, experiment_id: str, condition_id: int, model_name: str,
+                        guidance_scale: float, num_steps: int, metric_type: str,
+                        metric_name: str, value: float, expected_color: str, detected_color: str, image_path: str):
+        cursor = self.evaluation_conn.cursor()
+        cursor.execute("""
+            INSERT INTO raw_color_metrics (
+                experiment_id, condition_id, model_name, guidance_scale,
+                num_inference_steps, metric_type, metric_name, value, expected_color, detected_color, image_path, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            experiment_id, condition_id, model_name, guidance_scale,
+            num_steps, metric_type, metric_name, value, expected_color, detected_color, image_path, datetime.now().isoformat()
+        ))
+        self.evaluation_conn.commit()
+
     def _log_experiment_metric(self, experiment_id: str, model_name: str,
                                guidance_scale: float, num_steps: int, metric_type: str,
                                metric_name: str, value: float):
@@ -353,22 +432,22 @@ class Evaluator:
     def _compute_experiment_aggregates(self, experiment_id: str):
         """Compute and store experiment-wide statistics from raw metrics."""
         cursor = self.evaluation_conn.cursor()
-        
+
         # Get all unique configurations for this experiment
         cursor.execute("""
             SELECT DISTINCT model_name, guidance_scale, num_inference_steps, metric_type, metric_name
             FROM raw_metrics
             WHERE experiment_id = ?
         """, (experiment_id,))
-        
+
         for model, gs, steps, metric_type, metric_name in cursor.fetchall():
             # Calculate aggregates for this configuration and metric
             cursor.execute("""
                 SELECT value FROM raw_metrics
-                WHERE experiment_id = ? AND model_name = ? AND guidance_scale = ? 
+                WHERE experiment_id = ? AND model_name = ? AND guidance_scale = ?
                 AND num_inference_steps = ? AND metric_type = ? AND metric_name = ?
             """, (experiment_id, model, gs, steps, metric_type, metric_name))
-            
+
             values = [row[0] for row in cursor.fetchall()]
             if values:
                 mean_val = np.mean(values)
@@ -376,7 +455,7 @@ class Evaluator:
                 min_val = np.min(values)
                 max_val = np.max(values)
                 count = len(values)
-                
+
                 # Insert aggregated metrics
                 cursor.execute("""
                     INSERT INTO experiment_metrics (
@@ -385,5 +464,5 @@ class Evaluator:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (experiment_id, model, gs, steps, metric_type, metric_name,
                       mean_val, std_val, min_val, max_val, count, datetime.now().isoformat()))
-        
+
         self.evaluation_conn.commit()
