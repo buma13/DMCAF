@@ -1,0 +1,52 @@
+experiment_id: experiment_count_variants
+
+conditioning_db: conditioning.db
+output_db: dm_output.db
+metrics_db: metrics.db
+
+conditioning:
+  condition_sets:
+    - condition_set_id: condition_set_000
+      limit_number_of_conditions: 4
+      
+      types:
+        - color_prompt
+      # Fine-grained variant control
+      type_variants:
+        count_prompt:
+          variants: ["base", "numeral", "background"]
+          
+      # # Advanced filtering options
+      # filters:
+      #   # Number-based filtering  
+      #   number_range: [1, 2, 3, 4]  # Focus on small counts
+        
+      #   # Object-based filtering
+      #   objects: ["cat", "dog", "car", "bird"]  # Common objects
+
+dm_runner:
+  models:
+    - model_name: stable-diffusion-v1-5/stable-diffusion-v1-5
+      guidance_scale: 7.5
+      num_inference_steps: 50
+      seed: 8888
+
+    - model_name: stabilityai/stable-diffusion-2-1
+      guidance_scale: 7.5
+      num_inference_steps: 50
+      seed: 8888
+
+    - model_name: stabilityai/stable-diffusion-3-medium-diffusers
+      guidance_scale: 7.5
+      num_inference_steps: 50
+      seed: 8888
+
+    - model_name: stabilityai/stable-diffusion-3.5-medium
+      guidance_scale: 7.5
+      num_inference_steps: 28
+      seed: 8888
+
+evaluator:
+  metrics:
+    - YOLO Count
+    - Color Classification

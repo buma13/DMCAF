@@ -69,13 +69,13 @@ class ConditionGenerator:
         """)
         self.conn.commit()
 
-    def generate_experiment(self, experiment_id: str, n_text: int, n_compositional: int, n_seg: int, n_color: int, n_count: int) -> List[Dict]:
+    def generate_experiment(self, experiment_id: str, n_text: int, n_compositional: int, n_seg: int, n_color: int, n_count: int, count_params: Dict = None) -> List[Dict]:
         conditions = []
         conditions += self._generate_text_prompts(experiment_id, n_text)
         conditions += self._generate_compositional_prompts(experiment_id, n_compositional)
         conditions += self._generate_segmentation_maps(experiment_id, n_seg)
         conditions += self._generate_color_prompts(experiment_id, n_color)
-        conditions += self._generate_count_prompts(experiment_id, n_count)
+        conditions += self._generate_count_prompts(experiment_id, n_count, **(count_params or {}))
         self._log_metadata(experiment_id, n_text + n_compositional + n_color + n_count, n_seg)
         return conditions
 
@@ -105,34 +105,92 @@ class ConditionGenerator:
         self.conn.commit()
         return conditions
 
-    def _generate_count_prompts(self, experiment_id: str, count: int) -> List[Dict]:
+    def _generate_count_prompts(self, experiment_id: str, count: int, **kwargs) -> List[Dict]:
+        """
+        Generates count prompts with configurable variations.
+        
+        Args:
+            count: Base number of prompts to generate
+            **kwargs: Configuration from YAML:
+                - include_numeral_variant: bool (default False)
+                - include_background_variant: bool (default False) 
+                - object_indices: List[int] (default [39-45])
+                - backgrounds: List[str] (default ["unicolor background"])
+                - number_range: List[int] (default [1-4])
+        """
         cursor = self.conn.cursor()
         timestamp = datetime.now().isoformat()
         conditions = []
-
-        selected_indices = list(range(39, 46))
-        selected_objects = [self.objects[i] for i in selected_indices]
-
+        
+        # Extract configuration with robust defaults
+        include_numeral = kwargs.get('include_numeral_variant', False)
+        include_background = kwargs.get('include_background_variant', False)
+        object_indices = kwargs.get('object_indices', list(range(39, 46)))
+        backgrounds = kwargs.get('backgrounds', ["unicolor background"])
+        number_range = kwargs.get('number_range', [1, 2, 3, 4])
+        
+        # Validate object indices
+        valid_indices = [i for i in object_indices if 0 <= i < len(self.objects)]
+        if not valid_indices:
+            print("Warning: No valid object indices provided, using default range")
+            valid_indices = list(range(39, 46))
+        
+        selected_objects = [self.objects[i] for i in valid_indices]
+        
+        # Helper function to convert numbers to words
+        number_words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+        
         for _ in range(count):
-            number = random.choice(list(range(1, 5)))
+            number = random.choice(number_range)
             obj_singular = random.choice(selected_objects)
             obj_display = self.singular_to_plural[obj_singular] if number > 1 else obj_singular
-            prompt = f"a photo of {number} {obj_display} in front of unicolor background"
-            cursor.execute("""
-                INSERT INTO conditions (experiment_id, type, prompt, number, object, background, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (experiment_id, "count_prompt", prompt, number, obj_singular, "unicolor background", timestamp))
-            conditions.append({
-                "experiment_id": experiment_id,
-                "type": "count_prompt",
-                "prompt": prompt,
-                "number": number,
-                "object": obj_singular,
-                "background": "unicolor background",
-                "timestamp": timestamp
-            })
+            
+            # Get number word, fallback to numeral if not in dictionary
+            number_word = number_words.get(number, str(number))
+            
+            # Base prompt: "a photo of <number in text> <object>"
+            base_prompt = f"a photo of {number_word} {obj_display}"
+            conditions.extend(self._create_count_condition(
+                experiment_id, base_prompt, number, obj_singular, "base", timestamp, cursor
+            ))
+            
+            # Variant 1: Numeral version
+            if include_numeral:
+                numeral_prompt = f"a photo of {number} {obj_display}"
+                conditions.extend(self._create_count_condition(
+                    experiment_id, numeral_prompt, number, obj_singular, "numeral", timestamp, cursor
+                ))
+            
+            # Variant 2: Background version  
+            if include_background:
+                bg = random.choice(backgrounds)
+                bg_prompt = f"a photo of {number_word} {obj_display} in front of {bg}"
+                conditions.extend(self._create_count_condition(
+                    experiment_id, bg_prompt, number, obj_singular, "background", timestamp, cursor
+                ))
+        
         self.conn.commit()
         return conditions
+
+    def _create_count_condition(self, experiment_id: str, prompt: str, number: int, 
+                               obj_singular: str, variant: str, timestamp: str, cursor) -> List[Dict]:
+        """Helper to create count condition with proper type annotation."""
+        condition_type = f"count_prompt_{variant}"
+        
+        cursor.execute("""
+            INSERT INTO conditions (experiment_id, type, prompt, number, object, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (experiment_id, condition_type, prompt, number, obj_singular, timestamp))
+        
+        return [{
+            "experiment_id": experiment_id,
+            "type": condition_type,
+            "prompt": prompt,
+            "number": number,
+            "object": obj_singular,
+            "variant": variant,
+            "timestamp": timestamp
+        }]
     
 
     def _generate_color_prompts(self, experiment_id: str, count: int) -> List[Dict]:

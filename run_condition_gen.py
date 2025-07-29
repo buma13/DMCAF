@@ -16,13 +16,26 @@ def run_condition_generation(config_path: str):
 
     cond_gen = ConditionGenerator(conditioning_db_path=conditioning_db_path)
     cg_cfg = config.get('condition_generator', {})
+    
+    # Handle count_prompts configuration
+    count_config = cg_cfg.get('count_prompts', {})
+    if isinstance(count_config, int):
+        # Legacy format: just a number
+        n_count = count_config
+        count_params = {}
+    else:
+        # New format: dictionary with parameters
+        n_count = count_config.get('base_count', 0)
+        count_params = count_config
+    
     cond_gen.generate_experiment(
         experiment_id=config['condition_set_id'],
         n_text=cg_cfg.get('text_prompts', 0),
         n_compositional=cg_cfg.get('compositional_prompts', 0),
         n_seg=cg_cfg.get('segmentation_maps', 0),
         n_color=cg_cfg.get('color_prompts', 0),
-        n_count=cg_cfg.get('count_prompts', 0)
+        n_count=n_count,
+        count_params=count_params
     )
 
 

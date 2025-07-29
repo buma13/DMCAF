@@ -1,7 +1,8 @@
 import os
 import sqlite3
+import cv2
 import numpy as np
-from typing import List
+from typing import List, Dict, Tuple
 from datetime import datetime
 
 from PIL import Image
@@ -38,38 +39,66 @@ class Evaluator:
     def _create_evaluation_table(self):
         cursor = self.evaluation_conn.cursor()
         
-        # Table for per-image/per-condition raw metrics
+        # Single table for comprehensive per-image evaluation results
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS raw_metrics (
+            CREATE TABLE IF NOT EXISTS image_evaluations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 experiment_id TEXT,
                 condition_id INTEGER,
+                condition_type TEXT,
+                variant TEXT,
+                image_path TEXT,
                 model_name TEXT,
                 guidance_scale REAL,
                 num_inference_steps INTEGER,
-                metric_type TEXT,
-                metric_name TEXT,
-                value REAL,
-                image_path TEXT,
+                
+                -- Count evaluation metrics
+                expected_count INTEGER,
+                detected_count INTEGER,
+                count_accuracy REAL,
+                target_object TEXT,
+                
+                -- Segmentation metrics
+                target_pixels INTEGER,
+                total_pixels INTEGER,
+                pixel_ratio REAL,
+                coverage_percentage REAL,
+                
+                -- Color evaluation metrics  
+                expected_color TEXT,
+                detected_color TEXT,
+                color_accuracy REAL,
+                color_confidence REAL,
+                
+                -- Composition metrics
+                expected_relation TEXT,
+                composition_accuracy REAL,
+                obj1_detected INTEGER,
+                obj2_detected INTEGER,
+                object1 TEXT,
+                object2 TEXT,
+                
                 timestamp TEXT
             )
         """)
         
-        # Table for experiment-wide aggregated metrics
+        # Keep experiment aggregates table but simpler
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS experiment_metrics (
+            CREATE TABLE IF NOT EXISTS experiment_summary (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 experiment_id TEXT,
                 model_name TEXT,
                 guidance_scale REAL,
                 num_inference_steps INTEGER,
-                metric_type TEXT,
-                metric_name TEXT,
-                mean_value REAL,
-                std_value REAL,
-                min_value REAL,
-                max_value REAL,
-                count INTEGER,
+                condition_type TEXT,
+                
+                total_images INTEGER,
+                mean_count_accuracy REAL,
+                mean_pixel_ratio REAL,
+                mean_coverage_percentage REAL,
+                mean_color_accuracy REAL,
+                mean_composition_accuracy REAL,
+                
                 timestamp TEXT
             )
         """)
@@ -85,6 +114,9 @@ class Evaluator:
             self.evaluate_object_composition(experiment_id)
         if "Color Classification" in metrics:
             self.evaluate_color_classification(experiment_id)
+        
+        # Compute experiment summary once at the end
+        self._compute_experiment_summary(experiment_id)
 
     def _evaluate_fid(self, experiment_id: str):
         cursor = self.output_conn.cursor()
@@ -109,15 +141,23 @@ class Evaluator:
             mu_real, sigma_real = mu_gen + 0.1, sigma_gen + 0.01
 
             fid_score = self._calculate_fid(mu_real, sigma_real, mu_gen, sigma_gen)
-            self._log_experiment_metric(
-                experiment_id, model_name,
-                guidance_scale, num_steps,
-                "Quality", "FID", fid_score
-            )
+            
+            # Store FID score in experiment summary directly since it's a configuration-level metric
+            cursor = self.evaluation_conn.cursor()
+            cursor.execute("""
+                INSERT INTO experiment_summary (
+                    experiment_id, model_name, guidance_scale, num_inference_steps, condition_type,
+                    total_images, mean_count_accuracy, mean_pixel_ratio, mean_coverage_percentage,
+                    mean_color_accuracy, mean_composition_accuracy, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (experiment_id, model_name, guidance_scale, num_steps, 'FID',
+                  len(image_paths), fid_score, None, None, None, None, datetime.now().isoformat()))
+            self.evaluation_conn.commit()
 
     def evaluate_object_count(self, experiment_id: str):
         """
         Evaluates if the number of generated objects matches the number in the prompt.
+        Also performs segmentation pixel analysis.
         """
         print(f"Evaluating Object Count Accuracy for experiment: {experiment_id}")
         obj_counter = ObjectCounter()
@@ -131,29 +171,95 @@ class Evaluator:
         """, (experiment_id,))
         
         for cond_id, image_path, model, gs, steps in output_cursor.fetchall():
-            cond_cursor.execute("SELECT number, object FROM conditions WHERE id = ?", (cond_id,))
+            cond_cursor.execute("SELECT type, number, object FROM conditions WHERE id = ?", (cond_id,))
             cond_result = cond_cursor.fetchone()
-            if not cond_result:
+            if not cond_result or not cond_result[0].startswith('count_prompt'):
                 continue
+            
+            condition_type, expected_number, target_object = cond_result
+            variant = condition_type.split('_')[-1] if '_' in condition_type else 'base'
 
-            expected_number, target_object = cond_result
             if not os.path.exists(image_path):
                 print(f"Skipping non-existent image: {image_path}")
                 continue
 
-            detected_count = obj_counter.count_objects_in_image(image_path, target_object)
+            # Get segmentation data
+            seg_data = obj_counter.count_and_segment_objects(image_path, target_object)
+            detected_count = seg_data['count']
+            detections = seg_data['detections']
+            image_shape = seg_data['image_shape']
             
-            # Accuracy is 1 if counts match, 0 otherwise.
-            accuracy = 1.0 if detected_count == expected_number else 0.0
+            # Calculate all metrics
+            count_accuracy = 1.0 if detected_count == expected_number else 0.0
             
-            print(f"Image: {os.path.basename(image_path)}, Expected: {expected_number} {target_object}, Found: {detected_count}, Accuracy: {accuracy}")
-
-            self._log_raw_metric(
-                experiment_id, cond_id, model, gs, steps,
-                "Accuracy", f"ObjectCountAccuracy_{target_object}", accuracy, image_path
+            # Pixel analysis
+            pixel_metrics = None
+            if detections and image_shape:
+                pixel_metrics = self._analyze_segmentation_pixels(detections, image_shape, target_object)
+            
+            # Log comprehensive evaluation for this image
+            self._log_image_evaluation(
+                experiment_id=experiment_id,
+                condition_id=cond_id,
+                condition_type=condition_type,
+                variant=variant,
+                image_path=image_path,
+                model_name=model,
+                guidance_scale=gs,
+                num_inference_steps=steps,
+                # Count metrics
+                expected_count=expected_number,
+                detected_count=detected_count,
+                count_accuracy=count_accuracy,
+                target_object=target_object,
+                # Segmentation metrics
+                pixel_metrics=pixel_metrics
             )
-        self._compute_experiment_aggregates(experiment_id)
+            
+            print(f"Image: {os.path.basename(image_path)}, Expected: {expected_number} {target_object}, Found: {detected_count}, Accuracy: {count_accuracy}, Variant: {variant}")
+            if pixel_metrics:
+                print(f"  Pixel Analysis - Ratio: {pixel_metrics['pixel_ratio']:.4f}, Coverage: {pixel_metrics['coverage_percentage']:.2f}%")
     
+    def _analyze_segmentation_pixels(self, detections: List[Dict], image_shape: Tuple[int, int], target_object: str) -> Dict[str, float]:
+        """
+        Analyzes pixel-level segmentation results.
+        
+        Returns:
+            Dict containing pixel analysis metrics
+        """
+        height, width = image_shape
+        total_image_pixels = height * width
+        
+        # Create combined mask for all target objects
+        combined_mask = np.zeros((height, width), dtype=bool)
+        
+        for detection in detections:
+            if detection['class_name'] == target_object:
+                mask = detection['mask']
+                # Resize mask to image dimensions if needed
+                if mask.shape != (height, width):
+                    mask_resized = cv2.resize(mask.astype(np.uint8), (width, height))
+                    mask_bool = mask_resized > 0.5
+                else:
+                    mask_bool = mask > 0.5
+                
+                combined_mask = np.logical_or(combined_mask, mask_bool)
+        
+        # Count pixels covered by target objects
+        target_pixels = np.sum(combined_mask)
+        
+        # Calculate metrics
+        pixel_ratio = target_pixels / total_image_pixels if total_image_pixels > 0 else 0.0
+        coverage_percentage = pixel_ratio * 100
+        
+        return {
+            'target_pixels': int(target_pixels),
+            'total_pixels': total_image_pixels,
+            'pixel_ratio': pixel_ratio,
+            'coverage_percentage': coverage_percentage,
+            'num_objects': len([d for d in detections if d['class_name'] == target_object])
+        }
+
     def evaluate_color_classification(self, experiment_id: str):
         """
         Evaluates if the color of objects in generated images matches the expected color.
@@ -170,12 +276,12 @@ class Evaluator:
         """, (experiment_id,))
         
         for cond_id, image_path, model, gs, steps in output_cursor.fetchall():
-            cond_cursor.execute("SELECT color1, object FROM conditions WHERE id = ?", (cond_id,))
+            cond_cursor.execute("SELECT type, color1, object FROM conditions WHERE id = ?", (cond_id,))
             cond_result = cond_cursor.fetchone()
-            if not cond_result:
+            if not cond_result or cond_result[0] != 'color_prompt':
                 continue
 
-            expected_color, target_object = cond_result
+            condition_type, expected_color, target_object = cond_result
             if not os.path.exists(image_path):
                 print(f"Skipping non-existent image: {image_path}")
                 continue
@@ -183,17 +289,26 @@ class Evaluator:
             detected_color, confidence = color_classifier.classify_color(image_path, target_object)
 
             # Accuracy is 1 if colors match, 0 otherwise.
-            accuracy = 1.0 if detected_color == expected_color else 0.0
+            color_accuracy = 1.0 if detected_color == expected_color else 0.0
             
-            print(f"Image: {os.path.basename(image_path)}, Expected: {expected_color} {target_object}, Found: {detected_color}, Accuracy: {accuracy}")
+            print(f"Image: {os.path.basename(image_path)}, Expected: {expected_color} {target_object}, Found: {detected_color}, Accuracy: {color_accuracy}")
 
-            self._log_raw_metric(
-                experiment_id, cond_id, model, gs, steps,
-                "Accuracy", f"ColorClassificationAccuracy_{target_object}", accuracy, image_path
+            # Log comprehensive evaluation for this image
+            self._log_image_evaluation(
+                experiment_id=experiment_id,
+                condition_id=cond_id,
+                condition_type=condition_type,
+                image_path=image_path,
+                model_name=model,
+                guidance_scale=gs,
+                num_inference_steps=steps,
+                # Color metrics
+                expected_color=expected_color,
+                detected_color=detected_color,
+                color_accuracy=color_accuracy,
+                color_confidence=confidence,
+                target_object=target_object
             )
-        
-        # After processing all images, compute experiment-wide aggregates
-        self._compute_experiment_aggregates(experiment_id)
     def evaluate_object_composition(self, experiment_id: str):
         """
         Evaluates if the spatial relationship between objects in generated images
@@ -222,7 +337,7 @@ class Evaluator:
             if not cond_result or cond_result[0] != 'compositional_prompt':
                 continue
 
-            _, obj1_name, num1, relation, obj2_name, num2 = cond_result
+            condition_type, obj1_name, num1, relation, obj2_name, num2 = cond_result
             obj1_singular = obj1_name.rstrip('s')
             obj2_singular = obj2_name.rstrip('s')
 
@@ -235,29 +350,41 @@ class Evaluator:
             obj2_boxes = [d['box'] for d in detected_objects if d['class_name'] == obj2_singular]
 
             # Basic check: did we detect at least one of each required object?
-            if not obj1_boxes or not obj2_boxes:
-                accuracy = 0.0
+            obj1_detected = len(obj1_boxes) > 0
+            obj2_detected = len(obj2_boxes) > 0
+            
+            if not obj1_detected or not obj2_detected:
+                composition_accuracy = 0.0
             else:
                 # If objects are detected, check if any pair satisfies the spatial relationship.
-                accuracy = 0.0 # Assume failure until a correct pair is found
+                composition_accuracy = 0.0 # Assume failure until a correct pair is found
                 for b1 in obj1_boxes:
                     for b2 in obj2_boxes:
                         if self._check_spatial_relation(b1, b2, relation):
-                            accuracy = 1.0
+                            composition_accuracy = 1.0
                             break # Found a valid pair, no need to check others
-                    if accuracy == 1.0:
+                    if composition_accuracy == 1.0:
                         break
 
-            metric_name = f"CompositionalAccuracy_{obj1_singular}_{relation}_{obj2_singular}"
-            print(f"Image: {os.path.basename(image_path)}, Relation: '{relation}', Accuracy: {accuracy}")
+            print(f"Image: {os.path.basename(image_path)}, Relation: '{relation}', Accuracy: {composition_accuracy}")
 
-            self._log_raw_metric(
-                experiment_id, cond_id, model, gs, steps,
-                "Accuracy", metric_name, accuracy, image_path
+            # Log comprehensive evaluation for this image
+            self._log_image_evaluation(
+                experiment_id=experiment_id,
+                condition_id=cond_id,
+                condition_type=condition_type,
+                image_path=image_path,
+                model_name=model,
+                guidance_scale=gs,
+                num_inference_steps=steps,
+                # Composition metrics
+                expected_relation=relation,
+                composition_accuracy=composition_accuracy,
+                obj1_detected=1 if obj1_detected else 0,
+                obj2_detected=1 if obj2_detected else 0,
+                object1=obj1_singular,
+                object2=obj2_singular
             )
-        
-        # After processing all images, compute experiment-wide aggregates
-        self._compute_experiment_aggregates(experiment_id)
 
     def _check_spatial_relation(self, box1: List[float], box2: List[float], relation: str) -> bool:
         """Checks if box1 is in the correct spatial relation to box2."""
@@ -320,70 +447,82 @@ class Evaluator:
         fid = diff.dot(diff) + np.trace(sigma1 + sigma2 - 2 * covmean)
         return float(fid)
 
-    def _log_raw_metric(self, experiment_id: str, condition_id: int, model_name: str,
-                        guidance_scale: float, num_steps: int, metric_type: str,
-                        metric_name: str, value: float, image_path: str):
-        cursor = self.evaluation_conn.cursor()
-        cursor.execute("""
-            INSERT INTO raw_metrics (
-                experiment_id, condition_id, model_name, guidance_scale,
-                num_inference_steps, metric_type, metric_name, value, image_path, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            experiment_id, condition_id, model_name, guidance_scale,
-            num_steps, metric_type, metric_name, value, image_path, datetime.now().isoformat()
-        ))
-        self.evaluation_conn.commit()
-
-    def _log_experiment_metric(self, experiment_id: str, model_name: str,
-                               guidance_scale: float, num_steps: int, metric_type: str,
-                               metric_name: str, value: float):
-        cursor = self.evaluation_conn.cursor()
-        cursor.execute("""
-            INSERT INTO experiment_metrics (
-                experiment_id, model_name, guidance_scale, num_inference_steps,
-                metric_type, metric_name, mean_value, std_value, min_value, max_value, count, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            experiment_id, model_name, guidance_scale, num_steps, metric_type, metric_name,
-            value, None, None, None, None, datetime.now().isoformat()
-        ))
-        self.evaluation_conn.commit()
-
-    def _compute_experiment_aggregates(self, experiment_id: str):
-        """Compute and store experiment-wide statistics from raw metrics."""
+    def _log_image_evaluation(self, experiment_id: str, condition_id: int, condition_type: str,
+                             image_path: str, model_name: str, guidance_scale: float, 
+                             num_inference_steps: int, **kwargs):
+        """
+        Log comprehensive evaluation results for a single image.
+        """
         cursor = self.evaluation_conn.cursor()
         
-        # Get all unique configurations for this experiment
+        # Extract metrics from kwargs and handle None case
+        pixel_metrics = kwargs.get('pixel_metrics', {})
+        if pixel_metrics is None:
+            pixel_metrics = {}
+        
         cursor.execute("""
-            SELECT DISTINCT model_name, guidance_scale, num_inference_steps, metric_type, metric_name
-            FROM raw_metrics
+            INSERT INTO image_evaluations (
+                experiment_id, condition_id, condition_type, variant, image_path, model_name, 
+                guidance_scale, num_inference_steps,
+                expected_count, detected_count, count_accuracy, target_object,
+                target_pixels, total_pixels, pixel_ratio, coverage_percentage,
+                expected_color, detected_color, color_accuracy, color_confidence,
+                expected_relation, composition_accuracy, obj1_detected, obj2_detected,
+                object1, object2, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            experiment_id, condition_id, condition_type, kwargs.get('variant', 'base'), image_path, model_name,
+            guidance_scale, num_inference_steps,
+            # Count metrics
+            kwargs.get('expected_count'), kwargs.get('detected_count'), 
+            kwargs.get('count_accuracy'), kwargs.get('target_object'),
+            # Segmentation metrics
+            pixel_metrics.get('target_pixels'), pixel_metrics.get('total_pixels'),
+            pixel_metrics.get('pixel_ratio'), pixel_metrics.get('coverage_percentage'),
+            # Color metrics  
+            kwargs.get('expected_color'), kwargs.get('detected_color'),
+            kwargs.get('color_accuracy'), kwargs.get('color_confidence'),
+            # Composition metrics
+            kwargs.get('expected_relation'), kwargs.get('composition_accuracy'),
+            kwargs.get('obj1_detected'), kwargs.get('obj2_detected'),
+            kwargs.get('object1'), kwargs.get('object2'),
+            datetime.now().isoformat()
+        ))
+        self.evaluation_conn.commit()
+
+    def _compute_experiment_summary(self, experiment_id: str):
+        """
+        Compute experiment-wide summary statistics from image evaluations.
+        """
+        cursor = self.evaluation_conn.cursor()
+        
+        # Group by model configuration, condition type, and variant
+        cursor.execute("""
+            SELECT model_name, guidance_scale, num_inference_steps, condition_type, variant,
+                   COUNT(*) as total_images,
+                   AVG(count_accuracy) as mean_count_accuracy,
+                   AVG(pixel_ratio) as mean_pixel_ratio,
+                   AVG(coverage_percentage) as mean_coverage_percentage,
+                   AVG(color_accuracy) as mean_color_accuracy,
+                   AVG(composition_accuracy) as mean_composition_accuracy
+            FROM image_evaluations
             WHERE experiment_id = ?
+            GROUP BY model_name, guidance_scale, num_inference_steps, condition_type, variant
         """, (experiment_id,))
         
-        for model, gs, steps, metric_type, metric_name in cursor.fetchall():
-            # Calculate aggregates for this configuration and metric
-            cursor.execute("""
-                SELECT value FROM raw_metrics
-                WHERE experiment_id = ? AND model_name = ? AND guidance_scale = ? 
-                AND num_inference_steps = ? AND metric_type = ? AND metric_name = ?
-            """, (experiment_id, model, gs, steps, metric_type, metric_name))
+        for row in cursor.fetchall():
+            model, gs, steps, cond_type, variant, total, count_acc, pixel_ratio, coverage, color_acc, comp_acc = row
             
-            values = [row[0] for row in cursor.fetchall()]
-            if values:
-                mean_val = np.mean(values)
-                std_val = np.std(values)
-                min_val = np.min(values)
-                max_val = np.max(values)
-                count = len(values)
-                
-                # Insert aggregated metrics
-                cursor.execute("""
-                    INSERT INTO experiment_metrics (
-                        experiment_id, model_name, guidance_scale, num_inference_steps,
-                        metric_type, metric_name, mean_value, std_value, min_value, max_value, count, timestamp
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (experiment_id, model, gs, steps, metric_type, metric_name,
-                      mean_val, std_val, min_val, max_val, count, datetime.now().isoformat()))
+            # Create condition type with variant for summary
+            condition_summary_type = f"{cond_type}_{variant}" if variant != 'base' else cond_type
+            
+            cursor.execute("""
+                INSERT INTO experiment_summary (
+                    experiment_id, model_name, guidance_scale, num_inference_steps, condition_type,
+                    total_images, mean_count_accuracy, mean_pixel_ratio, mean_coverage_percentage,
+                    mean_color_accuracy, mean_composition_accuracy, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (experiment_id, model, gs, steps, condition_summary_type, total, count_acc, 
+                  pixel_ratio, coverage, color_acc, comp_acc, datetime.now().isoformat()))
         
         self.evaluation_conn.commit()
