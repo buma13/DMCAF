@@ -1,15 +1,10 @@
-condition_set_id: condition_set_000
+condition_set_id: condition_set_003
 
 conditioning_db: conditioning.db
 
 condition_generator:
-  text_prompts: 10
-  compositional_prompts: 10
-  segmentation_maps: 0
-  color_prompts: 10
-  
   count_prompts:
-    base_count: 10
+    base_count: 400
     include_numeral_variant: true
     include_background_variant: true
     object_indices: [39, 40, 41, 42, 43, 44, 45]

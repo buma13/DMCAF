@@ -8,7 +8,7 @@ import numpy as np
 from object_count import ObjectCounter
 
 class ObjectSegmenter:
-    def __init__(self, model_path='yolov8n-seg.pt'):
+    def __init__(self, model_path='yolo11m-seg.pt'):
         """
         Initializes the ObjectSegmenter with a YOLO segmentation model.
         """

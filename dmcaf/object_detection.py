@@ -4,7 +4,7 @@ import cv2
 from typing import Optional, List, Dict, Any
 
 class ObjectDetector:
-    def __init__(self, model_path='yolo11n.pt'):
+    def __init__(self, model_path='yolo11m.pt'):
         """
         Initializes the ObjectDetector with a YOLO model.
         """

@@ -46,26 +46,51 @@ class DMRunner:
             for cs in condition_sets:
                 cs_id = cs["condition_set_id"]
                 limit = cs.get("limit_number_of_conditions")
-                # The default is to run on all types of conditions.
-                types = cs.get("types")
-
-                query = "SELECT id, prompt FROM conditions WHERE experiment_id = ?"
+                
+                # Build query based on configuration
+                query_parts = ["SELECT id, prompt, type FROM conditions WHERE experiment_id = ?"]
                 params: List[Any] = [cs_id]
-
-                if types:
-                    placeholders = ','.join('?' for _ in types)
-                    query += f" AND type IN ({placeholders})"
-                    params.extend(types)
-
+                
+                # Handle type selection
+                type_conditions = self._build_type_conditions(cs, params)
+                if type_conditions:
+                    query_parts.append(f"AND ({type_conditions})")
+                
+                # Handle filters
+                filter_conditions = self._build_filter_conditions(cs, params)
+                if filter_conditions:
+                    query_parts.append(f"AND ({filter_conditions})")
+                
+                # Add limit
                 if limit:
-                    query += " LIMIT ?"
+                    query_parts.append("LIMIT ?")
                     params.append(limit)
-
+                
+                query = " ".join(query_parts)
+                
+                # DEBUG: Print the actual query and parameters
+                print(f"DEBUG: Executing query: {query}")
+                print(f"DEBUG: Parameters: {params}")
+                
                 cursor.execute(query, tuple(params))
-                conditions.extend(cursor.fetchall())
+                batch_conditions = cursor.fetchall()
+                
+                print(f"Found {len(batch_conditions)} conditions for condition set '{cs_id}'")
+                
+                # DEBUG: Show what types were found
+                if batch_conditions:
+                    types_found = set(cond[2] for cond in batch_conditions)
+                    print(f"DEBUG: Types found: {types_found}")
+                else:
+                    # DEBUG: Let's see what's actually available
+                    cursor.execute("SELECT DISTINCT type FROM conditions WHERE experiment_id = ?", (cs_id,))
+                    available_types = [row[0] for row in cursor.fetchall()]
+                    print(f"DEBUG: Available types in {cs_id}: {available_types}")
+                
+                conditions.extend(batch_conditions)
         else:
             cursor.execute(
-                "SELECT id, prompt FROM conditions WHERE experiment_id = ?",
+                "SELECT id, prompt, type FROM conditions WHERE experiment_id = ?",
                 (experiment_id,),
             )
             conditions = cursor.fetchall()
@@ -108,8 +133,8 @@ class DMRunner:
 
             pipe.scheduler.set_timesteps(num_inference_steps)
 
-            for condition_id, prompt in conditions:
-                print(f"[{model_name}] Generating: {prompt} (guidance={guidance_scale}, steps={num_inference_steps})")
+            for condition_id, prompt, condition_type in conditions:
+                print(f"[{model_name}] Generating: {prompt} (type: {condition_type}, guidance={guidance_scale}, steps={num_inference_steps})")
 
                 if "stable-diffusion-3" in model_name:
                     if visualize:
@@ -193,3 +218,67 @@ class DMRunner:
             condition_id, prompt, image_path, datetime.now().isoformat()
         ))
         self.output_conn.commit()
+
+    def _build_type_conditions(self, cs_config: Dict, params: List[Any]) -> str:
+        """Build SQL conditions for type selection."""
+        conditions = []
+        
+        # Handle simple types list (backwards compatible)
+        if "types" in cs_config:
+            for requested_type in cs_config["types"]:
+                # Fix: Use proper LIKE pattern with explicit parentheses
+                conditions.append("(type = ? OR type LIKE ?)")
+                params.extend([requested_type, f"{requested_type}_%"])
+        
+        # Handle type_variants (fine-grained control)
+        if "type_variants" in cs_config:
+            for base_type, config in cs_config["type_variants"].items():
+                variants = config.get("variants", [])
+                
+                if variants == "all":
+                    # Include all variants of this base type
+                    conditions.append("(type = ? OR type LIKE ?)")
+                    params.extend([base_type, f"{base_type}_%"])
+                else:
+                    # Include specific variants
+                    variant_conditions = []
+                    for variant in variants:
+                        variant_conditions.append("type = ?")
+                        params.append(f"{base_type}_{variant}")
+                    
+                    if variant_conditions:
+                        conditions.append(f"({' OR '.join(variant_conditions)})")
+    
+        return " OR ".join(conditions) if conditions else ""
+
+    def _build_filter_conditions(self, cs_config: Dict, params: List[Any]) -> str:
+        """Build SQL conditions for advanced filtering."""
+        conditions = []
+        filters = cs_config.get("filters", {})
+        
+        # Object filtering
+        if "objects" in filters:
+            placeholders = ','.join('?' for _ in filters["objects"])
+            conditions.append(f"object IN ({placeholders})")
+            params.extend(filters["objects"])
+        
+        # Number range filtering
+        if "number_range" in filters:
+            placeholders = ','.join('?' for _ in filters["number_range"])
+            conditions.append(f"number IN ({placeholders})")
+            params.extend(filters["number_range"])
+        
+        # Background filtering
+        if "backgrounds" in filters:
+            bg_conditions = []
+            for bg in filters["backgrounds"]:
+                bg_conditions.append("prompt LIKE ?")
+                params.append(f"%{bg}%")
+            if bg_conditions:
+                conditions.append(f"({' OR '.join(bg_conditions)})")
+        
+        # Custom SQL conditions
+        if "custom_where" in filters:
+            conditions.append(filters["custom_where"])
+        
+        return " AND ".join(conditions) if conditions else ""
