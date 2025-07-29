@@ -8,6 +8,20 @@ class ExperimentConfigValidator:
     def __init__(self, conditioning_db_path: str):
         self.conn = sqlite3.connect(conditioning_db_path)
     
+    def __enter__(self):
+        """Enter the runtime context related to this object."""
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        """Exit the runtime context and close the connection."""
+        self.close()
+    
+    def close(self):
+        """Close the SQLite connection."""
+        if self.conn:
+            self.conn.close()
+            self.conn = None
+    
     def validate_config(self, config_path: str) -> Dict[str, Any]:
         """Validate experiment configuration against available conditions."""
         with open(config_path, 'r') as f:
