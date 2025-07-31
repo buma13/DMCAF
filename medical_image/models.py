@@ -7,11 +7,11 @@ from monai.utils import set_determinism
 SEED = 42
 set_determinism(SEED)
 
-def get_model(device):
+def get_model(device, in_channels=1, out_channels=1):
     model = DiffusionModelUNet(
         spatial_dims=2,
-        in_channels=1,
-        out_channels=1,
+        in_channels=in_channels,
+        out_channels=out_channels,
         channels=(128, 256, 256),
         attention_levels=(False, True, True),
         num_res_blocks=1,
@@ -19,10 +19,10 @@ def get_model(device):
     ).to(device)
     return model
 
-def get_controlnet(device, model, scheduler):
+def get_controlnet(device, model, in_channels=1):
     controlnet = ControlNet(
         spatial_dims=2,
-        in_channels=1,
+        in_channels=in_channels,
         channels=(128, 256, 256),
         attention_levels=(False, True, True),
         num_res_blocks=1,
@@ -32,11 +32,11 @@ def get_controlnet(device, model, scheduler):
 
     controlnet.load_state_dict(model.state_dict(), strict=False)
 
-    # Freeze base model parameters
     for p in model.parameters():
         p.requires_grad = False
 
     return controlnet
+
 
 def get_scheduler():
     return DDPMScheduler(num_train_timesteps=1000)
