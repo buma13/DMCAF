@@ -7,6 +7,10 @@ from monai.metrics import DiceMetric
 from monai.transforms import AsDiscrete
 from tqdm import tqdm
 
+
+#TODO Doesn't work with fundus dataset, only decathlon
+
+
 # Define which experiment to evaluate
 EXPERIMENT_NUMBER = 3  # Change this to the experiment number you want to evaluate
 

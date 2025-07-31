@@ -8,6 +8,9 @@ from tqdm import tqdm
 from models import get_model, get_controlnet, get_scheduler, get_inferers
 from data import get_datasets_and_loaders
 
+
+#TODO Doesn't work with fundus dataset, only decathlon
+
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
