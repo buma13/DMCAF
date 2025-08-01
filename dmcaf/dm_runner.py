@@ -8,7 +8,6 @@ import numpy as np
 import torch
 import copy
 from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler, PNDMScheduler, AutoencoderKL, PixArtAlphaPipeline,StableDiffusion3Pipeline
-import dmcaf.prompt_to_prompt.sd_attention_google as AttentionUnet
 import dmcaf.prompt_to_prompt.ptp_utils as PtpUtilsUnet
 from . prompt_to_prompt.transformer_2d import Transformer2DModel
 import dmcaf.prompt_to_prompt.ptp_utils_vit as PtpUtilsTransformer
@@ -135,14 +134,14 @@ class DMRunner:
 
             pipe.scheduler.set_timesteps(num_inference_steps)"""
             
-            """pixart_transformer = Transformer2DModel.from_pretrained("PixArt-alpha/PixArt-XL-2-512x512", subfolder="transformer",torch_dtype=torch.float16,)
+            pixart_transformer = Transformer2DModel.from_pretrained("PixArt-alpha/PixArt-XL-2-512x512", subfolder="transformer",torch_dtype=torch.float16,)
             pipe = PixArtAlphaPipeline.from_pretrained(
                 "PixArt-alpha/PixArt-XL-2-512x512", 
                 transformer = pixart_transformer,
-                torch_dtype=torch.float16)"""
-            hf_token = "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"
+                torch_dtype=torch.float16)
+            """hf_token = "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"
             pipe = StableDiffusion3Pipeline.from_pretrained("stabilityai/stable-diffusion-3.5-medium", token=hf_token)
-            pipe = pipe.to("cuda")
+            pipe = pipe.to("cuda")"""
 
             for condition_id, prompt in conditions:
                 print(f"[{model_name}] Generating: {prompt} (guidance={guidance_scale}, steps={num_inference_steps})")
@@ -151,9 +150,9 @@ class DMRunner:
                 images = pipe(prompt=prompt,negative_prompt="",height=512,width=512).images[0]
 
                 for i in range(28):
-                    attn_map = AttentionUnet.get_self_attention_map(controller,256,i,False)
+                    attn_map = PtpUtilsTransformer.get_self_attention_map(controller,256,i,False)
                     transform_attn_maps = copy.deepcopy(attn_map)
-                    AttentionUnet.visualize_and_save_features_pca(
+                    PtpUtilsTransformer.visualize_and_save_features_pca(
                             torch.cat([attn_map], dim=0),
                             torch.cat([transform_attn_maps], dim=0),
                             ['debug'],
