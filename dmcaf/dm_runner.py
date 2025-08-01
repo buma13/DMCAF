@@ -6,9 +6,13 @@ from typing import Dict, Any, List
 from PIL import Image
 import numpy as np
 import torch
-from diffusers import StableDiffusionPipeline, StableDiffusion3Pipeline, DPMSolverMultistepScheduler, DDIMScheduler, PNDMScheduler, AutoencoderKL
-from . prompt_to_prompt.sd_attention_google import AttentionStore, show_cross_attention, run_and_display
-from . prompt_to_prompt.ptp_utils import view_images
+import copy
+from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler, PNDMScheduler, AutoencoderKL, PixArtAlphaPipeline,StableDiffusion3Pipeline
+import dmcaf.prompt_to_prompt.sd_attention_google as AttentionUnet
+import dmcaf.prompt_to_prompt.ptp_utils as PtpUtilsUnet
+from . prompt_to_prompt.transformer_2d import Transformer2DModel
+import dmcaf.prompt_to_prompt.ptp_utils_vit as PtpUtilsTransformer
+import gc
 
 class DMRunner:
     def __init__(self, conditioning_db_path: str, output_db_path: str, output_dir: str,visualize_cfg: Dict[str, Any] = None):
@@ -38,6 +42,8 @@ class DMRunner:
     def run_experiment(self, experiment_id: str, model_configs: List[Dict[str, Any]], visualizer_configs: List[Dict[str, Any]],condition_sets: List[Dict[str, Any]] | None = None):
         cursor = self.conditioning_conn.cursor()
         conditions = []
+        gc.collect()  # Clear any previous garbage collection to free up memory
+        torch.cuda.empty_cache()
         #setup visualizer
         visualizer_configs = visualizer_configs or {}
         visualize = visualizer_configs.get('visualize', False)
@@ -111,11 +117,7 @@ class DMRunner:
                 print(f"Loading VAE: {vae_name}")
                 pipeline_kwargs['vae'] = AutoencoderKL.from_pretrained(vae_name)
 
-            if "stable-diffusion-3" in model_name:
-               pipe = StableDiffusion3Pipeline.from_pretrained(model_name, torch_dtype=torch.float16)
-            else:
-                pipe = StableDiffusionPipeline.from_pretrained(model_name, **pipeline_kwargs)
-
+            """pipe = StableDiffusionPipeline.from_pretrained(model_name, **pipeline_kwargs)
             pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
 
             if scheduler_name:
@@ -131,31 +133,47 @@ class DMRunner:
                 else:
                     print(f"Warning: Scheduler '{scheduler_name}' not found. Using pipeline default.")
 
-            pipe.scheduler.set_timesteps(num_inference_steps)
+            pipe.scheduler.set_timesteps(num_inference_steps)"""
+            
+            """pixart_transformer = Transformer2DModel.from_pretrained("PixArt-alpha/PixArt-XL-2-512x512", subfolder="transformer",torch_dtype=torch.float16,)
+            pipe = PixArtAlphaPipeline.from_pretrained(
+                "PixArt-alpha/PixArt-XL-2-512x512", 
+                transformer = pixart_transformer,
+                torch_dtype=torch.float16)"""
+            hf_token = "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"
+            pipe = StableDiffusion3Pipeline.from_pretrained("stabilityai/stable-diffusion-3.5-medium", token=hf_token)
+            pipe = pipe.to("cuda")
 
-            for condition_id, prompt, condition_type in conditions:
-                print(f"[{model_name}] Generating: {prompt} (type: {condition_type}, guidance={guidance_scale}, steps={num_inference_steps})")
+            for condition_id, prompt in conditions:
+                print(f"[{model_name}] Generating: {prompt} (guidance={guidance_scale}, steps={num_inference_steps})")
+                controller = PtpUtilsTransformer.AttentionStore()
+                PtpUtilsTransformer.register_attention_control(pipe,controller)
+                images = pipe(prompt=prompt,negative_prompt="",height=512,width=512).images[0]
 
-                if "stable-diffusion-3" in model_name:
-                    if visualize:
-                        print("Warning: visualizing corss-attention not yet supported for ViT nased models (SD3+)")
-                    image = pipe(prompt, guidance_scale=guidance_scale, num_inference_steps=num_inference_steps).images[0]
-                else:
-                    controller = AttentionStore()
-                    # inference with prompt-to-prompt
-                    images, _ = run_and_display(
-                        ldm_stable=pipe,
-                        prompts=[prompt],
-                        controller=controller,
-                        latent=None,
-                        run_baseline=False,
-                        num_inference_steps=num_inference_steps,
-                        guidance_scale=guidance_scale,
-                        generator=generator,
-                        low_resource=low_resource,
-                        output_dir=self.output_dir
-                    )
-                    image = images[0]
+                for i in range(28):
+                    attn_map = AttentionUnet.get_self_attention_map(controller,256,i,False)
+                    transform_attn_maps = copy.deepcopy(attn_map)
+                    AttentionUnet.visualize_and_save_features_pca(
+                            torch.cat([attn_map], dim=0),
+                            torch.cat([transform_attn_maps], dim=0),
+                            ['debug'],
+                            i,
+                            './self_attn_maps'
+                        )
+                images.save('generated_img_cond{condition_id}.png')
+                # inference with prompt-to-prompt
+                """images, _ = run_and_display(
+                    ldm_stable=pipe,
+                    prompts=[prompt],
+                    controller=controller,
+                    latent=None,
+                    run_baseline=False,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                    generator=generator,
+                    low_resource=low_resource,
+                    output_dir=self.output_dir
+                )
 
                 image_path = self._save_image(
                     experiment_id=experiment_id,
@@ -187,7 +205,7 @@ class DMRunner:
                         visualize=True,
                         guidance_scale=guidance_scale,
                         num_inference_steps=num_inference_steps)
-                    self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path, visualize=True)
+                    self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path, visualize=True)"""
 
 
 

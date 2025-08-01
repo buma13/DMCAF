@@ -30,7 +30,11 @@ evaluator:
 visualizer:
   visualize: true
   low_resource: false
-  cross_attention:
+  cross_attention_unet:
+    res: 16
+    from_where: ["up", "down"]
+    select: 0
+  self_attention_dit:
     res: 16
     from_where: ["up", "down"]
     select: 0
