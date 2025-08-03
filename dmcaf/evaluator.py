@@ -2,6 +2,7 @@ import os
 import sqlite3
 import cv2
 import numpy as np
+import json
 from typing import List, Dict, Tuple
 from datetime import datetime
 
@@ -31,6 +32,9 @@ class Evaluator:
         self.evaluation_conn = sqlite3.connect(metrics_db_path)
         self._create_evaluation_table()
 
+        # Load YOLO class mappings for efficient class ID lookup
+        self.yolo_class_to_id = self._load_yolo_classes()
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = inception_v3(weights=Inception_V3_Weights.IMAGENET1K_V1, transform_input=False)
         self.model.fc = torch.nn.Identity()
@@ -44,6 +48,34 @@ class Evaluator:
                 std=[0.229, 0.224, 0.225]
             )
         ])
+
+    def _load_yolo_classes(self) -> Dict[str, int]:
+        """
+        Load YOLO class mappings from JSON file for efficient class ID lookup.
+        Returns a dictionary mapping class names to class IDs.
+        """
+        try:
+            # Try to find the assets directory relative to the current file
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            assets_path = os.path.join(os.path.dirname(current_dir), 'assets', 'yolo_classes.json')
+            
+            with open(assets_path, 'r') as f:
+                yolo_classes = json.load(f)
+            
+            # Convert from {class_id: class_name} to {class_name: class_id}
+            class_to_id = {}
+            for class_id, class_name in yolo_classes['class'].items():
+                class_to_id[class_name] = int(class_id)
+            
+            print(f"Loaded {len(class_to_id)} YOLO class mappings from {assets_path}")
+            return class_to_id
+            
+        except FileNotFoundError:
+            print("Warning: Could not load YOLO classes JSON file. Class filtering will be disabled.")
+            return {}
+        except Exception as e:
+            print(f"Error loading YOLO classes: {e}. Class filtering will be disabled.")
+            return {}
 
     def _create_evaluation_table(self):
         cursor = self.evaluation_conn.cursor()
@@ -67,11 +99,19 @@ class Evaluator:
                 count_accuracy REAL,
                 target_object TEXT,
                 
-                -- Segmentation metrics
-                target_pixels INTEGER,
+                -- Segmentation metrics (updated pixel_ratio calculation)
+                target_pixels INTEGER,  -- Total pixels covered by objects (for coverage)
                 total_pixels INTEGER,
-                pixel_ratio REAL,
-                coverage_percentage REAL,
+                pixel_ratio REAL,  -- Now: segmented pixels / bounding box area
+                coverage_percentage REAL,  -- Unchanged: percentage of image covered
+                segmented_pixels_in_bbox INTEGER,  -- New: segmented pixels within bounding boxes
+                total_bbox_pixels INTEGER,  -- New: total bounding box area
+                
+                -- Per-bbox granular metrics (JSON storage)
+                bbox_pixel_ratios TEXT,  -- JSON array of per-bbox metrics
+                min_bbox_pixel_ratio REAL,
+                max_bbox_pixel_ratio REAL,
+                std_bbox_pixel_ratio REAL,
                 
                 -- Color evaluation metrics  
                 expected_color TEXT,
@@ -192,8 +232,19 @@ class Evaluator:
                 print(f"Skipping non-existent image: {image_path}")
                 continue
 
-            # Get segmentation data
-            seg_data = obj_counter.count_and_segment_objects(image_path, target_object)
+            # Get target class ID for improved filtering
+            target_class_id = self.yolo_class_to_id.get(target_object) if self.yolo_class_to_id else None
+            
+            # Use higher confidence threshold and class filtering for better detection quality
+            conf_threshold = 0.6  # Increased from default 0.25 to reduce false positives
+            
+            # Get segmentation data with improved parameters
+            seg_data = obj_counter.count_and_segment_objects(
+                image_path, 
+                target_object=target_object,  # Keep for backward compatibility
+                target_class_id=target_class_id,  # More efficient class filtering
+                conf_threshold=conf_threshold  # Higher confidence threshold
+            )
             detected_count = seg_data['count']
             detections = seg_data['detections']
             image_shape = seg_data['image_shape']
@@ -225,26 +276,38 @@ class Evaluator:
                 pixel_metrics=pixel_metrics
             )
             
-            print(f"Image: {os.path.basename(image_path)}, Expected: {expected_number} {target_object}, Found: {detected_count}, Accuracy: {count_accuracy}, Variant: {variant}")
+            print(f"Image: {os.path.basename(image_path)}, Expected: {expected_number} {target_object}, Found: {detected_count}, Accuracy: {count_accuracy}, Variant: {variant} (conf≥{conf_threshold})")
             if pixel_metrics:
-                print(f"  Pixel Analysis - Ratio: {pixel_metrics['pixel_ratio']:.4f}, Coverage: {pixel_metrics['coverage_percentage']:.2f}%")
+                print(f"  Pixel Analysis - Seg/BBox Ratio: {pixel_metrics['pixel_ratio']:.4f}, Coverage: {pixel_metrics['coverage_percentage']:.2f}%")
     
     def _analyze_segmentation_pixels(self, detections: List[Dict], image_shape: Tuple[int, int], target_object: str) -> Dict[str, float]:
         """
-        Analyzes pixel-level segmentation results.
+        Analyzes pixel-level segmentation results with per-bbox granularity.
         
         Returns:
-            Dict containing pixel analysis metrics
+            Dict containing pixel analysis metrics where pixel_ratio is based on 
+            segmented pixels to bounding box area ratio (averaged across all objects)
         """
         height, width = image_shape
         total_image_pixels = height * width
         
-        # Create combined mask for all target objects
+        # Create combined mask for all target objects (for coverage calculation)
         combined_mask = np.zeros((height, width), dtype=bool)
         
-        for detection in detections:
+        # For aggregated metrics
+        total_segmented_pixels = 0
+        total_bbox_pixels = 0
+        target_object_count = 0
+        
+        # For per-bbox metrics
+        bbox_metrics = []
+        
+        for bbox_idx, detection in enumerate(detections):
             if detection['class_name'] == target_object:
                 mask = detection['mask']
+                box = detection['box']  # [x1, y1, x2, y2]
+                confidence = detection.get('confidence', 0.0)
+                
                 # Resize mask to image dimensions if needed
                 if mask.shape != (height, width):
                     mask_resized = cv2.resize(mask.astype(np.uint8), (width, height))
@@ -252,21 +315,67 @@ class Evaluator:
                 else:
                     mask_bool = mask > 0.5
                 
+                # Update combined mask for coverage calculation
                 combined_mask = np.logical_or(combined_mask, mask_bool)
+                
+                # Calculate bounding box area
+                x1, y1, x2, y2 = box
+                bbox_width = max(0, x2 - x1)
+                bbox_height = max(0, y2 - y1)
+                bbox_area = bbox_width * bbox_height
+                
+                # Count segmented pixels within this bounding box
+                bbox_mask = np.zeros((height, width), dtype=bool)
+                x1_int, y1_int = max(0, int(x1)), max(0, int(y1))
+                x2_int, y2_int = min(width, int(x2)), min(height, int(y2))
+                bbox_mask[y1_int:y2_int, x1_int:x2_int] = True
+                
+                # Count segmented pixels within the bounding box
+                segmented_in_bbox = np.sum(mask_bool & bbox_mask)
+                
+                # Calculate per-bbox pixel ratio
+                bbox_pixel_ratio = segmented_in_bbox / bbox_area if bbox_area > 0 else 0.0
+                
+                # Store per-bbox metrics
+                bbox_metrics.append({
+                    'bbox_id': bbox_idx,
+                    'bbox': [float(x1), float(y1), float(x2), float(y2)],
+                    'confidence': float(confidence),
+                    'pixel_ratio': float(bbox_pixel_ratio),
+                    'segmented_pixels': int(segmented_in_bbox),
+                    'bbox_pixels': int(bbox_area),
+                    'bbox_area_percentage': float(bbox_area / total_image_pixels * 100) if total_image_pixels > 0 else 0.0
+                })
+                
+                # Update aggregated totals
+                total_segmented_pixels += segmented_in_bbox
+                total_bbox_pixels += bbox_area
+                target_object_count += 1
         
-        # Count pixels covered by target objects
-        target_pixels = np.sum(combined_mask)
+        # Count total pixels covered by target objects (for coverage calculation)
+        total_coverage_pixels = np.sum(combined_mask)
         
-        # Calculate metrics
-        pixel_ratio = target_pixels / total_image_pixels if total_image_pixels > 0 else 0.0
-        coverage_percentage = pixel_ratio * 100
+        # Calculate aggregated metrics
+        pixel_ratio = total_segmented_pixels / total_bbox_pixels if total_bbox_pixels > 0 else 0.0
+        coverage_percentage = (total_coverage_pixels / total_image_pixels * 100) if total_image_pixels > 0 else 0.0
         
         return {
-            'target_pixels': int(target_pixels),
+            # Existing aggregated metrics
+            'target_pixels': int(total_coverage_pixels),
             'total_pixels': total_image_pixels,
             'pixel_ratio': pixel_ratio,
             'coverage_percentage': coverage_percentage,
-            'num_objects': len([d for d in detections if d['class_name'] == target_object])
+            'num_objects': target_object_count,
+            'segmented_pixels_in_bbox': int(total_segmented_pixels),
+            'total_bbox_pixels': int(total_bbox_pixels),
+            
+            # New per-bbox granular data
+            'bbox_pixel_ratios': json.dumps(bbox_metrics) if bbox_metrics else None,
+            
+            # Additional summary statistics
+            'min_bbox_pixel_ratio': min([b['pixel_ratio'] for b in bbox_metrics]) if bbox_metrics else None,
+            'max_bbox_pixel_ratio': max([b['pixel_ratio'] for b in bbox_metrics]) if bbox_metrics else None,
+            'std_bbox_pixel_ratio': float(np.std([b['pixel_ratio'] for b in bbox_metrics])) if len(bbox_metrics) > 1 else 0.0
         }
 
     def evaluate_color_classification(self, experiment_id: str):
@@ -367,7 +476,12 @@ class Evaluator:
             if not os.path.exists(image_path):
                 print(f"Skipping non-existent image: {image_path}")
                 continue
-            detected_objects = obj_detector.detect_objects_with_boxes(image_path)
+            
+            # Use higher confidence for more reliable object detection in composition analysis
+            detected_objects = obj_detector.detect_objects_with_boxes(
+                image_path, 
+                conf_threshold=0.6  # Higher confidence to reduce false positives
+            )
             
             obj1_boxes = [d['box'] for d in detected_objects if d['class_name'] == obj1_singular]
             obj2_boxes = [d['box'] for d in detected_objects if d['class_name'] == obj2_singular]
@@ -489,10 +603,12 @@ class Evaluator:
                 guidance_scale, num_inference_steps,
                 expected_count, detected_count, count_accuracy, target_object,
                 target_pixels, total_pixels, pixel_ratio, coverage_percentage,
+                segmented_pixels_in_bbox, total_bbox_pixels,
+                bbox_pixel_ratios, min_bbox_pixel_ratio, max_bbox_pixel_ratio, std_bbox_pixel_ratio,
                 expected_color, detected_color, color_accuracy, color_confidence,
                 expected_relation, composition_accuracy, obj1_detected, obj2_detected,
                 object1, object2, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             experiment_id, condition_id, condition_type, kwargs.get('variant', 'base'), image_path, model_name,
             guidance_scale, num_inference_steps,
@@ -502,6 +618,10 @@ class Evaluator:
             # Segmentation metrics
             pixel_metrics.get('target_pixels'), pixel_metrics.get('total_pixels'),
             pixel_metrics.get('pixel_ratio'), pixel_metrics.get('coverage_percentage'),
+            pixel_metrics.get('segmented_pixels_in_bbox'), pixel_metrics.get('total_bbox_pixels'),
+            # Per-bbox granular metrics
+            pixel_metrics.get('bbox_pixel_ratios'), pixel_metrics.get('min_bbox_pixel_ratio'),
+            pixel_metrics.get('max_bbox_pixel_ratio'), pixel_metrics.get('std_bbox_pixel_ratio'),
             # Color metrics  
             kwargs.get('expected_color'), kwargs.get('detected_color'),
             kwargs.get('color_accuracy'), kwargs.get('color_confidence'),
