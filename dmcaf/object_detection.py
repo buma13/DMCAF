@@ -10,15 +10,33 @@ class ObjectDetector:
         """
         self.model = YOLO(model_path)
     
-    def detect_objects_with_boxes(self, image_path: str, target_object: str=None) -> List[Dict[str, Any]]:
+    def detect_objects_with_boxes(self, image_path: str, target_object: str = None, 
+                                 target_class_id: Optional[int] = None, conf_threshold: float = 0.5) -> List[Dict[str, Any]]:
         """
         Detects objects in an image and returns their class names and bounding boxes.
+        
+        Args:
+            image_path: Path to the image file
+            target_object: Target object name for filtering (deprecated, use target_class_id)
+            target_class_id: YOLO class ID for filtering detections
+            conf_threshold: Confidence threshold for detections
         """
         if cv2.imread(image_path) is None:
             print(f"Warning: Image at path {image_path} could not be loaded.")
             return []
         
-        results = self.model.predict(image_path, verbose=False, save=True)
+        # Prepare prediction arguments
+        predict_kwargs = {
+            'verbose': False, 
+            'save': True,
+            'conf': conf_threshold
+        }
+        
+        # Add class filtering if target_class_id is specified
+        if target_class_id is not None:
+            predict_kwargs['classes'] = [target_class_id]
+        
+        results = self.model.predict(image_path, **predict_kwargs)
         result = results[0]
         
         detections = []
