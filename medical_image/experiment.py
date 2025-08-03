@@ -115,6 +115,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # Windows compatibility for multiprocessing
     import multiprocessing
     multiprocessing.freeze_support()
     main()
