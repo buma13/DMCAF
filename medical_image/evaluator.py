@@ -4,50 +4,61 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from monai.metrics import DiceMetric
-from monai.transforms import AsDiscrete
 from tqdm import tqdm
 
+# ------------ CONFIG ------------
+EXPERIMENT_NUMBER = 3          # experimentX
+DATASET_TYPE     = "fundus"    # "fundus" or "decathlon"
+THRESHOLD        = 0.8         # brightness threshold
+# --------------------------------
 
-#TODO Doesn't work with fundus dataset, only decathlon
+out_root       = Path.cwd() / "Outputs" / f"experiment{EXPERIMENT_NUMBER}"
+images_dir     = out_root / ("Segmentations" if DATASET_TYPE == "fundus" else "Images")
+masks_dir      = out_root / "Masks"
+results_file   = out_root / "dice_scores.txt"
 
+gen_files  = sorted(images_dir.glob("*.png"))
+mask_files = sorted(masks_dir.glob("*.png"))
+assert len(gen_files) == len(mask_files), "Image / mask count mismatch"
 
-# Define which experiment to evaluate
-EXPERIMENT_NUMBER = 3  # Change this to the experiment number you want to evaluate
-
-# Setup directories
-output_dir = Path.cwd() / "Outputs"
-experiment_dir = output_dir / f"experiment{EXPERIMENT_NUMBER}"
-images_dir = experiment_dir / "Images"
-masks_dir = experiment_dir / "Masks"
-results_file = experiment_dir / "dice_scores.txt"
-
-# Load image paths
-generated_files = sorted(images_dir.glob("generated_*.png"))
-mask_files = sorted(masks_dir.glob("mask_*.png"))
-assert len(generated_files) == len(mask_files), "Mismatch between generated images and masks."
-
-# Setup threshold and metric
-threshold = 0.1 # from the original code, adjust as needed
-to_discrete = AsDiscrete(threshold=threshold)
 dice_metric = DiceMetric(include_background=False, reduction="none")
+scores = []
 
-# Accumulate results
-all_scores = []
+for gen_fp, mask_fp in tqdm(zip(gen_files, mask_files),
+                            total=len(gen_files), desc="Evaluating"):
 
-for gen_file, mask_file in tqdm(zip(generated_files, mask_files), total=len(generated_files), desc="Evaluating"):
-    gen_img = torch.tensor(plt.imread(gen_file), dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-    mask_img = torch.tensor(plt.imread(mask_file), dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+    gen = torch.tensor(plt.imread(gen_fp),  dtype=torch.float32)
+    msk = torch.tensor(plt.imread(mask_fp), dtype=torch.float32)
 
-    pred_bin = to_discrete(gen_img)
-    mask_bin = to_discrete(mask_img)
+    # Ensure single-channel [H,W]
+    if gen.ndim == 3:
+        gen = gen.mean(-1)
+    if msk.ndim == 3:
+        msk = msk.mean(-1)
 
-    dice = dice_metric(pred_bin, mask_bin)
-    all_scores.append(dice.item())
+    if DATASET_TYPE == "fundus":
+        pred_bin  = (gen > THRESHOLD)
+        mask_bin  = (msk > THRESHOLD)
 
-# Save results
+        region = mask_bin          # evaluate ONLY where GT is foreground
+        if region.sum() == 0:      # no optic disc in this mask
+            continue
+
+        inter = (pred_bin & mask_bin)[region].sum()
+        union = pred_bin[region].sum() + mask_bin[region].sum()
+        dice  = (2.0 * inter) / (union + 1e-8)
+
+    else:   # decathlon → full-image Dice
+        pred_bin = (gen > THRESHOLD).unsqueeze(0).unsqueeze(0)
+        mask_bin = (msk > THRESHOLD).unsqueeze(0).unsqueeze(0)
+        dice     = dice_metric(pred_bin, mask_bin).item()
+
+    scores.append(float(dice))
+
+# ------------ SAVE ------------
 with open(results_file, "w") as f:
-    for i, score in enumerate(all_scores):
-        f.write(f"Sample {i}: Dice Score = {score:.4f}\n")
-    f.write(f"\nAverage Dice Score: {np.mean(all_scores):.4f}\n")
+    for i, s in enumerate(scores):
+        f.write(f"Sample {i}: Dice = {s:.4f}\n")
+    f.write(f"\nAverage Dice: {np.mean(scores):.4f}\n")
 
-print(f"Saved Dice scores to {results_file}")
+print("Saved to", results_file)
