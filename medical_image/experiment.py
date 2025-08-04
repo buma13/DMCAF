@@ -9,7 +9,7 @@ from tqdm import tqdm
 from models import get_model, get_controlnet, get_scheduler, get_inferers
 from data import get_datasets_and_loaders
 
-def random_resize_masks(masks, min_ratio=0.6, max_ratio=1.4, target_size=128):
+def random_resize_masks(masks, min_ratio=0.7, max_ratio=1.3, target_size=128):
     resized_masks = []
     for mask in masks:
         b, h, w = mask.shape[-3:]
@@ -77,7 +77,7 @@ def main():
     model.eval()
     controlnet.eval()
 
-    BATCH_SIZE = 16
+    BATCH_SIZE = 32
     IMG_SIZE = 128
     NUM_WORKERS = 4
     DATASET = "fundus"  # Change to "fundus" if needed
@@ -88,7 +88,7 @@ def main():
     for batch_idx, val_batch in enumerate(val_loader):
         val_images = val_batch["image"].to(device)
         val_masks = val_batch["mask"].to(device)
-        cond_masks = random_resize_masks(val_masks, min_ratio=0.9, max_ratio=1.6, target_size=IMG_SIZE)
+        cond_masks = random_resize_masks(val_masks, min_ratio=0.8, max_ratio=1.4, target_size=IMG_SIZE)
 
         num_samples = val_images.shape[0]
         sample = torch.randn((num_samples, 1, IMG_SIZE, IMG_SIZE)).to(device)
