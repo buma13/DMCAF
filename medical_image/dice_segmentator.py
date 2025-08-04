@@ -1,63 +1,95 @@
-import os
-from pathlib import Path
+import math
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+from pathlib import Path
 from monai.metrics import DiceMetric
 from tqdm import tqdm
 
-# ------------ CONFIG ------------
+# ---------- CONFIG ----------
 GROUND_TRUTH_DIR = Path("Outputs/predictions/optic-disc")
 PREDICTED_DIR    = Path("Outputs/predictions/Masks")
-RESULTS_FILE     = Path("Outputs/predictions") / "dice_scores.txt"
-THRESHOLD        = 0.3
-# --------------------------------
+RESULTS_FILE     = Path("Outputs/predictions/dice_scores_foreground.txt")
+N_SHOW           = 5          # how many pairs to visualise
+# -----------------------------
+
+# ---------- helpers ----------
+def load_png(path: Path) -> torch.Tensor:
+    """Load image, drop alpha, return grayscale float32 [H,W] in 0-1."""
+    img = plt.imread(path)
+    if img.ndim == 3:                      # RGB or RGBA
+        if img.shape[-1] == 4:
+            img = img[..., :3]
+        img = img.mean(-1)                # grayscale
+    elif img.ndim == 1:                    # flattened row vector
+        side = int(math.isqrt(img.size))
+        if side * side != img.size:
+            raise ValueError(f"{path.name}: cannot reshape {img.shape}")
+        img = img.reshape(side, side)
+    return torch.tensor(img, dtype=torch.float32)
+
+def to_one_hot(bin_mask: torch.Tensor) -> torch.Tensor:
+    """bin_mask [H,W]→ one-hot [1,2,H,W] (bg,fg) float32."""
+    bg = (1 - bin_mask).unsqueeze(0)
+    fg = bin_mask.unsqueeze(0)
+    return torch.stack([bg, fg], dim=0).unsqueeze(0).float()
+# -----------------------------
 
 gt_files  = sorted(GROUND_TRUTH_DIR.glob("*.png"))
 gen_files = sorted(PREDICTED_DIR.glob("*.png"))
-assert len(gt_files) == len(gen_files), "Mismatch in file counts."
+assert len(gt_files) == len(gen_files), "File count mismatch."
 
-scores = []
-file_names = []
+device      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+dice_metric = DiceMetric(include_background=False, reduction="none")
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+scores, names = [], []
 
-for gt_fp, gen_fp in tqdm(zip(gt_files, gen_files), total=len(gt_files), desc="Evaluating"):
-    gt  = torch.tensor(plt.imread(gt_fp), dtype=torch.float32, device=device)
-    gen = torch.tensor(plt.imread(gen_fp), dtype=torch.float32, device=device)
+# ---------- evaluation ----------
+print(f"Total samples: {len(gt_files)}  |  Device: {device}")
+for idx, (gt_fp, gen_fp) in enumerate(
+        tqdm(zip(gt_files, gen_files), total=len(gt_files), desc="Evaluating")):
 
-    if gt.ndim == 3:
-        gt = gt.mean(-1)
-    if gen.ndim == 3:
-        gen = gen.mean(-1)
+    gt_gray  = load_png(gt_fp)
+    gen_gray = load_png(gen_fp)
 
-    pred_bin = (gen > THRESHOLD)
-    mask_bin = (gt  > THRESHOLD)
+    # non-black → 1
+    gt_bin  = (gt_gray  > 0).to(torch.uint8)
+    gen_bin = (gen_gray > 0).to(torch.uint8)
 
-    region = mask_bin
-    if region.sum() == 0:
+    # skip empty GT masks
+    if gt_bin.sum() == 0:
         continue
 
-    inter = (pred_bin & mask_bin)[region].sum()
-    union = pred_bin[region].sum() + mask_bin[region].sum()
-    dice  = (2.0 * inter) / (union + 1e-8)
+    y      = to_one_hot(gt_bin).to(device)     # [1,2,H,W]
+    y_pred = to_one_hot(gen_bin).to(device)
 
+    dice = dice_metric(y_pred, y).item()
     scores.append(float(dice))
-    file_names.append(gt_fp.name)
+    names.append(gt_fp.name)
 
-# ------------ SAVE ------------
+    # ---- optional visual check ----
+    if idx < N_SHOW:
+        fig, ax = plt.subplots(1, 2, figsize=(6, 3))
+        ax[0].imshow(gt_bin.cpu(),  cmap="gray", vmin=0, vmax=1)
+        ax[0].set_title(f"GT bin  ({gt_fp.name})");  ax[0].axis("off")
+        ax[1].imshow(gen_bin.cpu(), cmap="gray", vmin=0, vmax=1)
+        ax[1].set_title("Pred bin");                 ax[1].axis("off")
+        plt.tight_layout(); plt.show()
+
+# ---------- save results ----------
+RESULTS_FILE.parent.mkdir(parents=True, exist_ok=True)
 with open(RESULTS_FILE, "w") as f:
-    for fname, score in zip(file_names, scores):
-        f.write(f"{fname}: Dice = {score:.4f}\n")
+    for n, s in zip(names, scores):
+        f.write(f"{n}: Dice = {s:.4f}\n")
 
     f.write("\n==== Summary Statistics ====\n")
     f.write(f"Samples Evaluated       : {len(scores)}\n")
     f.write(f"Mean Dice               : {np.mean(scores):.4f}\n")
     f.write(f"Median Dice             : {np.median(scores):.4f}\n")
-    f.write(f"Standard Deviation      : {np.std(scores):.4f}\n")
+    f.write(f"Std Dev Dice            : {np.std(scores):.4f}\n")
     f.write(f"Min Dice                : {np.min(scores):.4f}\n")
     f.write(f"Max Dice                : {np.max(scores):.4f}\n")
-    f.write(f"Dice > 0.90 (success%)  : {(np.sum(np.array(scores) > 0.9) / len(scores)) * 100:.2f}%\n")
-    f.write(f"Dice > 0.80             : {(np.sum(np.array(scores) > 0.8) / len(scores)) * 100:.2f}%\n")
+    f.write(f"Dice > 0.90             : {(np.mean(np.array(scores) > 0.9)*100):.2f}%\n")
+    f.write(f"Dice > 0.80             : {(np.mean(np.array(scores) > 0.8)*100):.2f}%\n")
 
-print(f"Saved summary to: {RESULTS_FILE}")
+print(f"\nSaved summary to: {RESULTS_FILE}")
