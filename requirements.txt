@@ -8,3 +8,4 @@ ultralytics==8.3.168
 six==1.17.0
 protobuf==6.31.1
 sentencepiece==0.2.0
+monai-weekly[tqdm]
