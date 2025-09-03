@@ -109,7 +109,7 @@ class DMRunner:
             guidance_scale = config.get('guidance_scale', 7.5)
             num_inference_steps = config.get('num_inference_steps', 50)
             generator = torch.Generator(device="cpu").manual_seed(config.get('seed', 42))
-            pipeline_kwargs = {}
+            pipeline_kwargs = {} # Additional kwargs for pipeline initialization
             if vae_name:
                 print(f"Loading VAE: {vae_name}")
                 pipeline_kwargs['vae'] = AutoencoderKL.from_pretrained(vae_name)
@@ -195,9 +195,7 @@ class DMRunner:
                 print(conditions)
                 pipe = pipe.to("cuda")
                 pipe.enable_attention_slicing()
-                """hf_token = "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"
-                pipe = StableDiffusion3Pipeline.from_pretrained("stabilityai/stable-diffusion-3.5-medium", token=hf_token)
-                pipe = pipe.to("cuda")"""
+             
 
                 for condition_id, prompt in conditions:
                     print(f"[{model_name}] Generating: {prompt} (guidance={guidance_scale}, steps={num_inference_steps})")
