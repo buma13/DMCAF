@@ -9,6 +9,12 @@ from diffusers.utils.constants import USE_PEFT_BACKEND
 from matplotlib import pyplot as plt
 from torch import einsum
 from einops import rearrange
+import os
+from math import sqrt
+from PIL import Image
+import numpy as np
+from sklearn.decomposition import PCA
+from torchvision import transforms as T
 
 class Hack_AttnProcessor:
 

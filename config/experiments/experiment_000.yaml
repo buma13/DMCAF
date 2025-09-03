@@ -29,6 +29,7 @@ evaluator:
 
 visualizer:
   visualize: true
+  dit: true
   low_resource: false
   cross_attention_unet:
     res: 16
