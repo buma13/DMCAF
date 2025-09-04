@@ -34,15 +34,15 @@
     },
     {
       "name": "pink",
-      "hex": "#FFC0CB"
+      "hex": "#FF80FF"
     },
     {
       "name": "orange",
-      "hex": "#FFA500"
+      "hex": "#FF8000"
     },
     {
       "name": "brown",
-      "hex": "#A52A2A"
+      "hex": "#573116"
     }
   ]
 }

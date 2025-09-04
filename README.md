@@ -23,7 +23,7 @@ $env:HF_HOME = "/mnt/projects/mlmi/dmcaf/models/hf_home"
 $env:TORCH_HOME = "/mnt/projects/mlmi/dmcaf/models/torch_home"
 $env:MONAI_DATA_DIRECTORY = "/mnt/projects/mlmi/dmcaf/models/monai_home/datasets"
 $env:YOLO_CONFIG_DIR = "/mnt/projects/mlmi/dmcaf/models/yolo_config"
-$env:OUTPUT_DIRECTORY = "/mnt/projects/mlmi/dmcaf/data"
+$env:OUTPUT_DIRECTORY = "C:/Users/burak/Desktop/DMCAF/data"
 `
 
 ## Usage

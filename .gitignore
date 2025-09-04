@@ -14,3 +14,4 @@ medical_image/Checkpoints/
 .idea
 *.pt
 medical_image/Outputs/
+data_002

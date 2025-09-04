@@ -13,6 +13,7 @@ from scipy.linalg import sqrtm
 from .object_count import ObjectCounter
 from .object_detection import ObjectDetector
 from .object_color_classification import ObjectColorClassifier
+from .object_segmentation import ObjectSegmenter
 
 
 class Evaluator:
@@ -66,8 +67,10 @@ class Evaluator:
                 
                 -- Color evaluation metrics  
                 expected_color TEXT,
-                detected_color TEXT,
-                color_accuracy REAL,
+                detected_color_clip TEXT,
+                detected_color_knn TEXT,
+                color_accuracy_clip REAL,
+                color_accuracy_knn REAL,
                 color_confidence REAL,
                 
                 -- Composition metrics
@@ -266,6 +269,7 @@ class Evaluator:
         """
         print(f"Evaluating Object Color Classification Accuracy for experiment: {experiment_id}")
         color_classifier = ObjectColorClassifier()
+        object_segmenter = ObjectSegmenter()
         output_cursor = self.output_conn.cursor()
         cond_cursor = self.conditioning_conn.cursor()
             
@@ -281,17 +285,32 @@ class Evaluator:
             if not cond_result or cond_result[0] != 'color_prompt':
                 continue
 
+            cluster_path = '/mnt/projects/mlmi/dmcaf'
+            new_path = 'C:/Users/burak/Desktop/DMCAF'
+            image_path = image_path.replace(cluster_path, new_path)
+
             condition_type, expected_color, target_object = cond_result
             if not os.path.exists(image_path):
                 print(f"Skipping non-existent image: {image_path}")
                 continue
 
-            detected_color, confidence = color_classifier.classify_color(image_path, target_object)
+            seg_data = object_segmenter.segment_objects_in_image(image_path, target_object=target_object)
+            detections = seg_data['detections']
+            image_shape = seg_data['image_shape']
+            if detections:
+                best_detection = max(detections, key=lambda x: x['confidence'])
+
+            # detected_color_clip, confidence = color_classifier.classify_color(image_path, object_name=target_object, detections=detections)
+            detected_color_knn, _, dominant_rgb = color_classifier.classify_color_knn(image_path, detections=detections)
 
             # Accuracy is 1 if colors match, 0 otherwise.
-            color_accuracy = 1.0 if detected_color == expected_color else 0.0
-            
-            print(f"Image: {os.path.basename(image_path)}, Expected: {expected_color} {target_object}, Found: {detected_color}, Accuracy: {color_accuracy}")
+            # color_accuracy_clip = 1.0 if detected_color_clip == expected_color else 0.0
+            color_accuracy_knn = 1.0 if detected_color_knn == expected_color else 0.0
+
+            # Pixel analysis
+            pixel_metrics = None
+            if detections and image_shape:
+                pixel_metrics = self._analyze_segmentation_pixels([best_detection], image_shape, target_object)
 
             # Log comprehensive evaluation for this image
             self._log_image_evaluation(
@@ -304,11 +323,19 @@ class Evaluator:
                 num_inference_steps=steps,
                 # Color metrics
                 expected_color=expected_color,
-                detected_color=detected_color,
-                color_accuracy=color_accuracy,
-                color_confidence=confidence,
-                target_object=target_object
+                detected_color_clip=None,
+                detected_color_knn=detected_color_knn,
+                color_accuracy_clip=0,
+                color_accuracy_knn=color_accuracy_knn,
+                color_confidence=0,
+                target_object=target_object,
+                pixel_metrics=pixel_metrics
             )
+
+            print(f"Image: {os.path.basename(image_path)}, Expected: {expected_color} {target_object}, Found: CLIP: None, kNN: {detected_color_knn}")
+            if pixel_metrics:
+                print(f"  Pixel Analysis - Ratio: {pixel_metrics['pixel_ratio']:.4f}, Coverage: {pixel_metrics['coverage_percentage']:.2f}%")
+
     def evaluate_object_composition(self, experiment_id: str):
         """
         Evaluates if the spatial relationship between objects in generated images
@@ -466,10 +493,10 @@ class Evaluator:
                 guidance_scale, num_inference_steps,
                 expected_count, detected_count, count_accuracy, target_object,
                 target_pixels, total_pixels, pixel_ratio, coverage_percentage,
-                expected_color, detected_color, color_accuracy, color_confidence,
+                expected_color, detected_color_clip, detected_color_knn, color_accuracy_clip, color_accuracy_knn,  color_confidence,
                 expected_relation, composition_accuracy, obj1_detected, obj2_detected,
                 object1, object2, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             experiment_id, condition_id, condition_type, kwargs.get('variant', 'base'), image_path, model_name,
             guidance_scale, num_inference_steps,
@@ -480,8 +507,8 @@ class Evaluator:
             pixel_metrics.get('target_pixels'), pixel_metrics.get('total_pixels'),
             pixel_metrics.get('pixel_ratio'), pixel_metrics.get('coverage_percentage'),
             # Color metrics  
-            kwargs.get('expected_color'), kwargs.get('detected_color'),
-            kwargs.get('color_accuracy'), kwargs.get('color_confidence'),
+            kwargs.get('expected_color'), kwargs.get('detected_color_clip'), kwargs.get('detected_color_knn'),
+            kwargs.get('color_accuracy_clip'), kwargs.get('color_accuracy_knn'),  kwargs.get('color_confidence'),
             # Composition metrics
             kwargs.get('expected_relation'), kwargs.get('composition_accuracy'),
             kwargs.get('obj1_detected'), kwargs.get('obj2_detected'),
@@ -503,7 +530,8 @@ class Evaluator:
                    AVG(count_accuracy) as mean_count_accuracy,
                    AVG(pixel_ratio) as mean_pixel_ratio,
                    AVG(coverage_percentage) as mean_coverage_percentage,
-                   AVG(color_accuracy) as mean_color_accuracy,
+                   AVG(color_accuracy_clip) as mean_color_accuracy_clip,
+                   AVG(color_accuracy_knn) as mean_color_accuracy_knn,
                    AVG(composition_accuracy) as mean_composition_accuracy
             FROM image_evaluations
             WHERE experiment_id = ?
@@ -511,7 +539,7 @@ class Evaluator:
         """, (experiment_id,))
         
         for row in cursor.fetchall():
-            model, gs, steps, cond_type, variant, total, count_acc, pixel_ratio, coverage, color_acc, comp_acc = row
+            model, gs, steps, cond_type, variant, total, count_acc, pixel_ratio, coverage, color_acc_clip, color_acc_knn, comp_acc = row
             
             # Create condition type with variant for summary
             condition_summary_type = f"{cond_type}_{variant}" if variant != 'base' else cond_type
@@ -520,9 +548,9 @@ class Evaluator:
                 INSERT INTO experiment_summary (
                     experiment_id, model_name, guidance_scale, num_inference_steps, condition_type,
                     total_images, mean_count_accuracy, mean_pixel_ratio, mean_coverage_percentage,
-                    mean_color_accuracy, mean_composition_accuracy, timestamp
+                    mean_color_accuracy_clip, mean_color_accuracy_knn, mean_composition_accuracy, timestamp
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (experiment_id, model, gs, steps, condition_summary_type, total, count_acc, 
-                  pixel_ratio, coverage, color_acc, comp_acc, datetime.now().isoformat()))
+                  pixel_ratio, coverage, color_acc_clip, color_acc_knn, comp_acc, datetime.now().isoformat()))
         
         self.evaluation_conn.commit()
