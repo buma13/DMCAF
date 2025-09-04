@@ -4,22 +4,26 @@ from transformers import CLIPProcessor, CLIPModel
 import os
 import json
 from .object_detection import ObjectDetector
-from .util import crop_image, remove_image_background
+from .object_segmentation import ObjectSegmenter
+from .util import crop_image
+
+from PIL import Image
+import json
 
 class ObjectColorClassifier:
     def __init__(self, model_name="openai/clip-vit-large-patch14"):
         self.model = CLIPModel.from_pretrained(model_name)
         self.processor = CLIPProcessor.from_pretrained(model_name)
         self.object_detector = ObjectDetector()
+        self.object_segmenter = ObjectSegmenter()
         current_dir = os.path.dirname(os.path.abspath(__file__))
         json_path = os.path.join(current_dir, '..', 'assets', 'colors.json')
         with open(json_path, 'r') as f:
             data = json.load(f)
+            self.color_data = data
             self.colors = [c['name'] for c in data['colors']]
         
-    def classify_color(self, image_path, object_name='object'):
-        # Detect objects in the image
-        detections = self.object_detector.detect_objects_with_boxes(image_path, target_object=object_name)
+    def classify_color(self, image_path, detections, object_name='object'):
         if not detections:
             print(f"No objects of type '{object_name}' detected.")
             return None, 0.0
@@ -37,11 +41,12 @@ class ObjectColorClassifier:
         cropped_path = os.path.join(processed_dir, f"cropped_{img_name}")
         bg_removed_path = os.path.join(processed_dir, f"bg_removed_{img_name}")
 
-        crop_image(input_path=image_path, box=best_detection['box'], output_path=cropped_path)
-        remove_image_background(input_path=cropped_path, output_path=bg_removed_path)
+        
+        self.object_segmenter.remove_background(image_path=image_path, segments=[best_detection], output_path=bg_removed_path)
+        crop_image(input_path=bg_removed_path, box=best_detection['box'], output_path=cropped_path)
 
         # Load the processed image as a PIL Image
-        processed_image = Image.open(bg_removed_path)
+        processed_image = Image.open(cropped_path)
 
         color_texts = [f"a photo of a {color} {object_name}" for color in self.colors]
         inputs = self.processor(

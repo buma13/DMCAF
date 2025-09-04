@@ -1,16 +1,5 @@
 
-from rembg import remove
 from PIL import Image
-
-def remove_image_background(input_path: str, output_path: str=None) -> Image.Image:
-    """
-    Removes the background from an image at input_path and saves the result to output_path.
-    """
-    input = Image.open(input_path)
-    output = remove(input)
-    if output_path:
-        output.save(output_path)
-    return output
 
 def crop_image(input_path: str, box: list, output_path: str=None) -> Image.Image:
     """
@@ -22,6 +11,3 @@ def crop_image(input_path: str, box: list, output_path: str=None) -> Image.Image
     if output_path:
         cropped.save(output_path)
     return cropped
-
-if __name__ == "__main__":
-    remove_image_background(input_path="coco_sample.jpg", output_path="rembg_output.png")
