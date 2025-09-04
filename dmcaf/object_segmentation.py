@@ -1,11 +1,7 @@
-import ultralytics
 from ultralytics import YOLO
 import cv2
 from typing import Optional, List, Dict, Any
-from PIL import Image
-import requests
 import numpy as np
-from object_count import ObjectCounter
 
 class ObjectSegmenter:
     def __init__(self, model_path='yolo11m-seg.pt'):
@@ -19,9 +15,12 @@ class ObjectSegmenter:
         Performs instance segmentation on an image.
         Returns a list of dicts with class name, bounding box, and mask.
         """
-        if cv2.imread(image_path) is None:
+        image = cv2.imread(image_path)
+        if image is None:
             print(f"Warning: Image at path {image_path} could not be loaded.")
             return []
+        # Get image dimensions
+        image_shape = image.shape[:2]  # (height, width)
         
         results = self.model.predict(image_path, verbose=False)
         result = results[0]
@@ -32,13 +31,18 @@ class ObjectSegmenter:
             if target_object and class_name != target_object:
                 continue
             coordinates = box.xyxy[0].tolist()
+            confidence = float(box.conf[0])  # Get confidence score
             mask_array = mask.cpu().numpy() if hasattr(mask, 'cpu') else mask
             segments.append({
                 'class_name': class_name,
                 'box': coordinates,
-                'mask': mask_array
+                'mask': mask_array,
+                'confidence': confidence
             })
-        return segments
+        return {
+            'image_shape': image_shape,
+            'detections': segments
+        }
 
     def visualize_and_save(self, image_path: str, segments: List[Dict[str, Any]], output_path: str = "segmentation_result.png"):
         """
@@ -70,31 +74,3 @@ class ObjectSegmenter:
         foreground = cv2.cvtColor(image, cv2.COLOR_BGR2BGRA)
         foreground[..., 3] = mask_total.astype(np.uint8) * 255
         cv2.imwrite(output_path, foreground)
-        print(f"Foreground saved to {output_path}")
-
-if __name__ == "__main__":
-    # Get an image from the COCO dataset
-    url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-    image = Image.open(requests.get(url, stream=True).raw)
-    # Save the image locally for cv2 and YOLO
-    image_path = "coco_sample.jpg"
-    image.save(image_path)
-    segmenter = ObjectSegmenter()
-
-    remove_background = True  
-
-    if remove_background:
-        # call remove_background method
-        detector = ObjectCounter()
-        bounding_boxes = detector.detect_objects_with_boxes(image_path)
-
-        exit(0)
-
-        segments = segmenter.segment_objects_in_image(image_path)
-        segmenter.remove_background(image_path, segments, output_path="foreground.png")
-    else:
-        segments = segmenter.segment_objects_in_image(image_path)
-        print(f"Number of segmented objects: {len(segments)}")
-        if segments:
-            print(f"First segment info: {segments[0]}")
-            segmenter.visualize_and_save(image_path, segments, output_path="coco_segmentation_result.png")

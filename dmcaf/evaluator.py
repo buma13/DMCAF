@@ -13,6 +13,7 @@ from scipy.linalg import sqrtm
 from .object_count import ObjectCounter
 from .object_detection import ObjectDetector
 from .object_color_classification import ObjectColorClassifier
+from .object_segmentation import ObjectSegmenter
 
 
 class Evaluator:
@@ -266,6 +267,7 @@ class Evaluator:
         """
         print(f"Evaluating Object Color Classification Accuracy for experiment: {experiment_id}")
         color_classifier = ObjectColorClassifier()
+        object_segmenter = ObjectSegmenter()
         output_cursor = self.output_conn.cursor()
         cond_cursor = self.conditioning_conn.cursor()
             
@@ -286,12 +288,24 @@ class Evaluator:
                 print(f"Skipping non-existent image: {image_path}")
                 continue
 
-            detected_color, confidence = color_classifier.classify_color(image_path, target_object)
+            seg_data = object_segmenter.segment_objects_in_image(image_path, target_object=target_object)
+            detections = seg_data['detections']
+            image_shape = seg_data['image_shape']
+            if detections:
+                best_detection = max(detections, key=lambda x: x['confidence'])
+
+            detected_color, confidence = color_classifier.classify_color(image_path, object_name=target_object, detections=detections)
 
             # Accuracy is 1 if colors match, 0 otherwise.
             color_accuracy = 1.0 if detected_color == expected_color else 0.0
             
             print(f"Image: {os.path.basename(image_path)}, Expected: {expected_color} {target_object}, Found: {detected_color}, Accuracy: {color_accuracy}")
+
+
+            # Pixel analysis
+            pixel_metrics = None
+            if detections and image_shape:
+                pixel_metrics = self._analyze_segmentation_pixels([best_detection], image_shape, target_object)
 
             # Log comprehensive evaluation for this image
             self._log_image_evaluation(
@@ -307,7 +321,8 @@ class Evaluator:
                 detected_color=detected_color,
                 color_accuracy=color_accuracy,
                 color_confidence=confidence,
-                target_object=target_object
+                target_object=target_object,
+                pixel_metrics=pixel_metrics
             )
     def evaluate_object_composition(self, experiment_id: str):
         """
