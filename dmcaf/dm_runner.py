@@ -10,7 +10,7 @@ import copy
 from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler, PNDMScheduler, AutoencoderKL, PixArtAlphaPipeline,StableDiffusion3Pipeline
 import dmcaf.prompt_to_prompt.ptp_utils as PtpUtilsUnet
 from . prompt_to_prompt.transformer_2d import Transformer2DModel
-import DMCAF.dmcaf.prompt_to_prompt.ptp_utils_dit as PtpUtilsTransformer
+import dmcaf.prompt_to_prompt.ptp_utils_dit as PtpUtilsTransformer
 import gc
 
 class DMRunner:
@@ -136,7 +136,7 @@ class DMRunner:
 
                 pipe.scheduler.set_timesteps(num_inference_steps)
                 # inference with prompt-to-prompt
-                for condition_id, prompt in conditions:
+                for condition_id, prompt, _ in conditions:
                     controller = PtpUtilsUnet.AttentionStore()
                     images, _ = PtpUtilsUnet.run_and_display(
                         ldm_stable=pipe,
@@ -197,7 +197,7 @@ class DMRunner:
                 pipe.enable_attention_slicing()
              
 
-                for condition_id, prompt in conditions:
+                for condition_id, prompt, _ in conditions:
                     print(f"[{model_name}] Generating: {prompt} (guidance={guidance_scale}, steps={num_inference_steps})")
                     controller = PtpUtilsTransformer.AttentionStore()
                     PtpUtilsTransformer.register_attention_control(pipe,controller)
