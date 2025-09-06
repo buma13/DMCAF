@@ -21,7 +21,7 @@ And then set the environment variables with the command below
 `
 $env:HF_HOME = "/mnt/projects/mlmi/dmcaf/models/hf_home"
 $env:TORCH_HOME = "/mnt/projects/mlmi/dmcaf/models/torch_home"
-$env:MONAI_DATA_DIRECTORY = "/mnt/projects/mlmi/dmcaf/models/monai_home/datasets"
+$env:MONAI_HOME = "/mnt/projects/mlmi/dmcaf/models/monai_home"
 $env:YOLO_CONFIG_DIR = "/mnt/projects/mlmi/dmcaf/models/yolo_config"
 $env:OUTPUT_DIRECTORY = "/mnt/projects/mlmi/dmcaf/data"
 `

@@ -1,0 +1,22 @@
+experiment_id: experiment_fundus
+
+conditioning_db: conditioning.db
+output_db: dm_output.db
+metrics_db: metrics.db
+
+conditioning:
+  condition_sets:
+    - condition_set_id: fundus
+      limit_number_of_conditions: 512
+      types:
+        - segmentation_mask
+
+dm_runner:
+  models:
+    - model_name: unet
+      num_inference_steps: 1000
+      seed: 42
+
+evaluator:
+  metrics:
+    - DICE

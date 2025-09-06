@@ -8,9 +8,11 @@ DMCAF_ENV/
 outputs/
 runs/
 
-# Ignore Datasets and Checkpoints directories under medical_image/
+# Ignore Datasets and Checkpoints directories for medical_image/
 medical_image/Datasets/
 medical_image/Checkpoints/
 .idea
 *.pt
 medical_image/Outputs/
+data
+models
