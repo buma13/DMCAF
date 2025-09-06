@@ -8,11 +8,27 @@ from PIL import Image
 import numpy as np
 import torch
 import copy
-from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler, PNDMScheduler, AutoencoderKL, PixArtAlphaPipeline,StableDiffusion3Pipeline
-import dmcaf.prompt_to_prompt.ptp_utils as PtpUtilsUnet
+import gc
+
+from diffusers import (
+    StableDiffusionControlNetPipeline,
+    StableDiffusionPipeline,
+    StableDiffusion3Pipeline,
+    ControlNetModel,
+    DPMSolverMultistepScheduler,
+    DDIMScheduler,
+    PNDMScheduler,
+    AutoencoderKL,
+    PixArtAlphaPipeline,
+)
+from . prompt_to_prompt.sd_attention_google import (
+    AttentionStore,
+    show_cross_attention,
+    run_and_display,
+    view_images,
+)
 from . prompt_to_prompt.transformer_2d import Transformer2DModel
 import dmcaf.prompt_to_prompt.ptp_utils_dit as PtpUtilsTransformer
-import gc
 
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -64,7 +80,7 @@ class DMRunner:
                 limit = cs.get("limit_number_of_conditions")
                 
                 # Build query based on configuration
-                query_parts = ["SELECT id, prompt, type FROM conditions WHERE experiment_id = ?"]
+                query_parts = ["SELECT id, prompt, type, segmentation_path FROM conditions WHERE experiment_id = ?"]
                 params: List[Any] = [cs_id]
                 
                 # Handle type selection
@@ -106,7 +122,7 @@ class DMRunner:
                 conditions.extend(batch_conditions)
         else:
             cursor.execute(
-                "SELECT id, prompt, type FROM conditions WHERE experiment_id = ?",
+                "SELECT id, prompt, type, segmentation_path FROM conditions WHERE experiment_id = ?",
                 (experiment_id,),
             )
             conditions = cursor.fetchall()
@@ -123,76 +139,136 @@ class DMRunner:
             if vae_name:
                 print(f"Loading VAE: {vae_name}")
                 pipeline_kwargs['vae'] = AutoencoderKL.from_pretrained(vae_name)
-
-            # run standard dm_runner for unet-based models
-            if not dit and not ("stable-diffusion-3" in model_name): 
+            # UNet-based pipelines
+            if not dit:
                 print(f"Loading model: {model_name}")
 
-                pipe = StableDiffusionPipeline.from_pretrained(model_name, **pipeline_kwargs)
-                pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+                if "stable-diffusion-3" in model_name:
+                    pipe = StableDiffusion3Pipeline.from_pretrained(model_name, torch_dtype=torch.float16)
+                elif "laparoscopic" in model_name:
+                    # TODO: Move paths to config
+                    CONTROLNET_PATH = "/mnt/projects/mlmi/dmcaf_laparoscopic/models/ControlNet/checkpoint-70000/controlnet"
+                    STABLEDIFFUSION_PATH = "/mnt/projects/mlmi/dmcaf_laparoscopic/models/StableDiffusion"
+                    controlnet = ControlNetModel.from_pretrained(
+                        CONTROLNET_PATH, torch_dtype=torch.float16, use_safetensors=True
+                    )
+                    pipe = StableDiffusionControlNetPipeline.from_pretrained(
+                        STABLEDIFFUSION_PATH,
+                        controlnet=controlnet,
+                        torch_dtype=torch.float16,
+                        use_safetensors=True,
+                        safety_checker=None,
+                    )
+                else:
+                    pipe = StableDiffusionPipeline.from_pretrained(model_name, **pipeline_kwargs)
+                    pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
 
-                if scheduler_name:
-                    scheduler_class = {
-                        "DPMSolverMultistepScheduler": DPMSolverMultistepScheduler,
-                        "DDIMScheduler": DDIMScheduler,
-                        "PNDMScheduler": PNDMScheduler,
-                    }.get(scheduler_name)
+                    if scheduler_name:
+                        scheduler_class = {
+                            "DPMSolverMultistepScheduler": DPMSolverMultistepScheduler,
+                            "DDIMScheduler": DDIMScheduler,
+                            "PNDMScheduler": PNDMScheduler,
+                        }.get(scheduler_name)
 
-                    if scheduler_class:
-                        print(f"Using scheduler: {scheduler_name}")
-                        pipe.scheduler = scheduler_class.from_config(pipe.scheduler.config)
-                    else:
-                        print(f"Warning: Scheduler '{scheduler_name}' not found. Using pipeline default.")
+                        if scheduler_class:
+                            print(f"Using scheduler: {scheduler_name}")
+                            pipe.scheduler = scheduler_class.from_config(pipe.scheduler.config)
+                        else:
+                            print(f"Warning: Scheduler '{scheduler_name}' not found. Using pipeline default.")
 
                 pipe.scheduler.set_timesteps(num_inference_steps)
-                # inference with prompt-to-prompt
-                for condition_id, prompt, _ in conditions:
-                    controller = PtpUtilsUnet.AttentionStore()
-                    images, _ = PtpUtilsUnet.run_and_display(
-                        ldm_stable=pipe,
-                        prompts=[prompt],
-                        controller=controller,
-                        latent=None,
-                        run_baseline=False,
-                        num_inference_steps=num_inference_steps,
-                        guidance_scale=guidance_scale,
-                        generator=generator,
-                        low_resource=low_resource,
-                        output_dir=self.output_dir
-                    )
 
-                    image = images[0]
-                    image_path = self._save_image(
-                        experiment_id=experiment_id,
-                        model_name=model_name,
-                        condition_id=condition_id,
-                        image=image,
-                        visualize=False,
-                        guidance_scale=guidance_scale,
-                        num_inference_steps=num_inference_steps)
-                    self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path,visualize=False)
-                    # If visualization is enabled, show cross-attention maps
-                    if visualize:
-                        print(f"[{model_name}] Visualizing cross-attention for: {prompt}")
-                        cross_attention_images=PtpUtilsUnet.show_cross_attention(
-                            tokenizer=pipe.tokenizer,
+                for condition_id, prompt, condition_type, segmentation_path in conditions:
+                    print(f"[{model_name}] Generating: {prompt} (type: {condition_type}, guidance={guidance_scale}, steps={num_inference_steps})")
+
+                    if "stable-diffusion-3" in model_name:
+                        if visualize:
+                            print("Warning: visualizing corss-attention not yet supported for ViT nased models (SD3+)")
+                        image = pipe(prompt, guidance_scale=guidance_scale, num_inference_steps=num_inference_steps).images[0]
+                    elif "laparoscopic" in model_name:
+                        if visualize:
+                            print("Warning: visualizing corss-attention not yet supported for ControlNet Model")
+                        if not segmentation_path:
+                            print(f"Warning: condition {condition_id} missing segmentation_path, skipping")
+                            continue
+                        ctrl_img = Image.open(segmentation_path).convert("RGB")
+                        image = pipe(
+                            prompt,
+                            image=ctrl_img,
+                            height=128,
+                            width=128,
+                            num_inference_steps=num_inference_steps,
+                            guidance_scale=guidance_scale,
+                            num_images_per_prompt=1,
+                        ).images[0]
+                    else:
+                        controller = AttentionStore()
+                        # inference with prompt-to-prompt
+                        images, _ = run_and_display(
+                            ldm_stable=pipe,
                             prompts=[prompt],
-                            attention_store=controller,
-                            res=cross_attention_cfg.get("res", 16),
-                            from_where=tuple(cross_attention_cfg.get("from_where", ["up", "down"])),
-                            select=cross_attention_cfg.get("select", 0),
+                            controller=controller,
+                            latent=None,
+                            run_baseline=False,
+                            num_inference_steps=num_inference_steps,
+                            guidance_scale=guidance_scale,
+                            generator=generator,
+                            low_resource=low_resource,
+                            output_dir=self.output_dir,
                         )
-                        # Convert cross-attention images to a format suitable for saving
-                        attention_format_images=PtpUtilsUnet.view_images((cross_attention_images), num_rows=1, offset_ratio=0.02)
+
+                        image = images[0]
                         image_path = self._save_image(
                             experiment_id=experiment_id,
                             model_name=model_name,
                             condition_id=condition_id,
-                            image=attention_format_images,
-                            visualize=True,
+                            image=image,
+                            visualize=False,
                             guidance_scale=guidance_scale,
-                            num_inference_steps=num_inference_steps)
-                        self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path, visualize=True)
+                            num_inference_steps=num_inference_steps,
+                        )
+                        self._log_output(
+                            experiment_id,
+                            model_name,
+                            guidance_scale,
+                            num_inference_steps,
+                            condition_id,
+                            prompt,
+                            image_path,
+                            visualize=False,
+                        )
+                        # If visualization is enabled, show cross-attention maps
+                        if visualize:
+                            print(f"[{model_name}] Visualizing cross-attention for: {prompt}")
+                            cross_attention_images = show_cross_attention(
+                                tokenizer=pipe.tokenizer,
+                                prompts=[prompt],
+                                attention_store=controller,
+                                res=cross_attention_cfg.get("res", 16),
+                                from_where=tuple(cross_attention_cfg.get("from_where", ["up", "down"])),
+                                select=cross_attention_cfg.get("select", 0),
+                            )
+                            # Convert cross-attention images to a format suitable for saving
+                            attention_format_images = view_images(cross_attention_images, num_rows=1, offset_ratio=0.02)
+                            image_path = self._save_image(
+                                experiment_id=experiment_id,
+                                model_name=model_name,
+                                condition_id=condition_id,
+                                image=attention_format_images,
+                                visualize=True,
+                                guidance_scale=guidance_scale,
+                                num_inference_steps=num_inference_steps,
+                            )
+                            self._log_output(
+                                experiment_id,
+                                model_name,
+                                guidance_scale,
+                                num_inference_steps,
+                                condition_id,
+                                prompt,
+                                image_path,
+                                visualize=True,
+                            )
 
             # run dit model with transformer backbone, we currently support sd-3 med, sd-3.5 med and PixArt-XL.
             else:

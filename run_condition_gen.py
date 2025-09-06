@@ -27,6 +27,8 @@ def run_condition_generation(config_path: str):
         # New format: dictionary with parameters
         n_count = count_config.get('base_count', 0)
         count_params = count_config
+
+    dataset_path = cg_cfg.get('dataset_path', None)
     
     cond_gen.generate_experiment(
         experiment_id=config['condition_set_id'],
@@ -35,7 +37,8 @@ def run_condition_generation(config_path: str):
         n_seg=cg_cfg.get('segmentation_maps', 0),
         n_color=cg_cfg.get('color_prompts', 0),
         n_count=n_count,
-        count_params=count_params
+        count_params=count_params,
+        dataset_path=dataset_path,
     )
 
 

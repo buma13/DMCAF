@@ -69,14 +69,40 @@ class ConditionGenerator:
         """)
         self.conn.commit()
 
-    def generate_experiment(self, experiment_id: str, n_text: int, n_compositional: int, n_seg: int, n_color: int, n_count: int, count_params: Dict = None) -> List[Dict]:
+    def generate_experiment(
+        self,
+        experiment_id: str,
+        n_text: int,
+        n_compositional: int,
+        n_seg: int,
+        n_color: int,
+        n_count: int,
+        count_params: Dict = None,
+        dataset_path: Optional[str] = None,
+    ) -> List[Dict]:
+        """Generate an experiment configuration.
+
+        If ``dataset_path`` is provided, segmentation map entries are read from a
+        ``train.jsonl`` file located at that path. Each line in the file is
+        expected to be a JSON object containing ``text`` and
+        ``conditioning_image`` fields. The ``text`` field is stored as the
+        prompt and the ``conditioning_image`` as the segmentation path.
+        """
         conditions = []
         conditions += self._generate_text_prompts(experiment_id, n_text)
         conditions += self._generate_compositional_prompts(experiment_id, n_compositional)
-        conditions += self._generate_segmentation_maps(experiment_id, n_seg)
+        conditions += self._generate_segmentation_maps(
+            experiment_id, n_seg, dataset_path=dataset_path
+        )
         conditions += self._generate_color_prompts(experiment_id, n_color)
-        conditions += self._generate_count_prompts(experiment_id, n_count, **(count_params or {}))
-        self._log_metadata(experiment_id, n_text + n_compositional + n_color + n_count, n_seg)
+        conditions += self._generate_count_prompts(
+            experiment_id, n_count, **(count_params or {})
+        )
+        self._log_metadata(
+            experiment_id,
+            n_text + n_compositional + n_color + n_count,
+            max(n_seg, len([c for c in conditions if c["type"] == "segmentation_map"])),
+        )
         return conditions
 
     def _generate_text_prompts(self, experiment_id: str, count: int) -> List[Dict]:
@@ -270,24 +296,87 @@ class ConditionGenerator:
         self.conn.commit()
         return conditions
 
-    def _generate_segmentation_maps(self, experiment_id: str, count: int) -> List[Dict]:
+    def _generate_segmentation_maps(
+        self, experiment_id: str, count: int, dataset_path: Optional[str] = None
+    ) -> List[Dict]:
         cursor = self.conn.cursor()
         timestamp = datetime.now().isoformat()
-        conditions = []
-        for _ in range(count):
-            image_path = "/mnt/data/example_image.png"
-            seg_path = "/mnt/data/example_segmentation.png"
-            cursor.execute("""
+        conditions: List[Dict] = []
+
+        if dataset_path:
+            train_file = os.path.join(dataset_path, "train.jsonl")
+            if not os.path.exists(train_file):
+                raise FileNotFoundError(
+                    f"train.jsonl not found in dataset path: {dataset_path}"
+                )
+            with open(train_file, "r") as f:
+                lines = f.readlines()
+
+            # Randomly sample lines from the dataset. If ``count`` is zero or
+            # greater than the available number of entries, fall back to using
+            # the entire dataset. Sampling without replacement ensures unique
+            # elements when a limit is specified.
+            if count and len(lines) > count:
+                sampled_lines = random.sample(lines, count)
+            else:
+                sampled_lines = lines
+
+            for line in sampled_lines:
+                record = json.loads(line)
+                prompt = record.get("text", "")
+                img_rel = record.get("image")
+                seg_rel = record.get("conditioning_image")
+                image_path = (
+                    os.path.join(dataset_path, img_rel) if img_rel else None
+                )
+                seg_path = (
+                    os.path.join(dataset_path, seg_rel) if seg_rel else None
+                )
+                cursor.execute(
+                    """
+                INSERT INTO conditions (experiment_id, type, prompt, image_path, segmentation_path, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        experiment_id,
+                        "segmentation_map",
+                        prompt,
+                        image_path,
+                        seg_path,
+                        timestamp,
+                    ),
+                )
+                conditions.append(
+                    {
+                        "experiment_id": experiment_id,
+                        "type": "segmentation_map",
+                        "prompt": prompt,
+                        "image_path": image_path,
+                        "segmentation_path": seg_path,
+                        "timestamp": timestamp,
+                    }
+                )
+        else:
+            for _ in range(count):
+                image_path = "/mnt/data/example_image.png"
+                seg_path = "/mnt/data/example_segmentation.png"
+                cursor.execute(
+                    """
                 INSERT INTO conditions (experiment_id, type, image_path, segmentation_path, timestamp)
                 VALUES (?, ?, ?, ?, ?)
-            """, (experiment_id, "segmentation_map", image_path, seg_path, timestamp))
-            conditions.append({
-                "experiment_id": experiment_id,
-                "type": "segmentation_map",
-                "image_path": image_path,
-                "segmentation_path": seg_path,
-                "timestamp": timestamp
-            })
+                """,
+                    (experiment_id, "segmentation_map", image_path, seg_path, timestamp),
+                )
+                conditions.append(
+                    {
+                        "experiment_id": experiment_id,
+                        "type": "segmentation_map",
+                        "image_path": image_path,
+                        "segmentation_path": seg_path,
+                        "timestamp": timestamp,
+                    }
+                )
+
         self.conn.commit()
         return conditions
 

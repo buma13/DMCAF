@@ -1,0 +1,7 @@
+condition_set_id: laparoscopic_controlnet
+
+conditioning_db: conditioning.db
+
+condition_generator:
+  dataset_path: /mnt/projects/mlmi/dmcaf_laparoscopic/dataset/controlnet
+  segmentation_maps: 1000
