@@ -15,6 +15,14 @@ from .object_detection import ObjectDetector
 from .object_color_classification import ObjectColorClassifier
 from .object_segmentation import ObjectSegmenter
 
+from pathlib import Path
+from torch import nn
+from tqdm import tqdm
+from transformers import AutoImageProcessor, SegformerForSemanticSegmentation
+import matplotlib.pyplot as plt
+import shutil
+import math
+from monai.metrics import DiceMetric
 
 class Evaluator:
     def __init__(self, conditioning_db_path: str, output_db_path: str, metrics_db_path: str):
@@ -541,3 +549,161 @@ class Evaluator:
                   pixel_ratio, coverage, color_acc, comp_acc, datetime.now().isoformat()))
         
         self.evaluation_conn.commit()
+
+
+class Evaluator_Fundus:
+    def __init__(self, monai_home: str, output_dir: str):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.monai_home = monai_home
+        self.output_dir = output_dir
+
+    def evaluate_outputs(self, experiment_id: str, metrics: List[str]):
+        # if "FID" in metrics:
+        #     self._evaluate_fid(experiment_id)
+        if "DICE" in metrics:
+            self._generate_segmentations(experiment_id)
+            self._evaluate_dice(experiment_id)
+
+        # Compute experiment summary once at the end
+        # self._compute_experiment_summary(experiment_id)
+
+    def _evaluate_dice(self, experiment_id: str):
+
+        root = Path(self.output_dir)
+        GT_DIR = root / "Images"  # ground truths (as stated)
+        PRED_DIR = root / "SegmentationPreds"  # predicted masks
+        RESULTS_FILE = root / f"{experiment_id}_dice_scores.txt"
+
+        # --- Helpers ---
+        def load_png(path: Path) -> torch.Tensor:
+            """Load image, drop alpha if present, return grayscale float32 [H,W] in [0,1]."""
+            img = plt.imread(path)
+            if img.ndim == 3:  # RGB or RGBA
+                if img.shape[-1] == 4:
+                    img = img[..., :3]
+                img = img.mean(-1)
+            elif img.ndim == 1:  # rare: flattened
+                side = int(math.isqrt(img.size))
+                if side * side != img.size:
+                    raise ValueError(f"{path.name}: cannot reshape {img.shape}")
+                img = img.reshape(side, side)
+            return torch.tensor(img, dtype=torch.float32)
+
+        def to_one_hot(bin_mask: torch.Tensor) -> torch.Tensor:
+            """bin_mask [H,W] -> one-hot [1,2,H,W] (bg, fg), float32."""
+            bg = (1 - bin_mask).unsqueeze(0)
+            fg = bin_mask.unsqueeze(0)
+            return torch.stack([bg, fg], dim=0).unsqueeze(0).float()
+
+        # collect files (File name must match)
+        gt_files = sorted([p for p in GT_DIR.glob("*.png")])
+        pred_files = sorted([p for p in PRED_DIR.glob("*.png")])
+
+        if not gt_files:
+            raise FileNotFoundError(f"No ground-truth PNGs in {GT_DIR}")
+        if not pred_files:
+            raise FileNotFoundError(f"No prediction PNGs in {PRED_DIR}")
+
+        # build a filename->path map for predictions and align order by GT names
+        pred_map = {p.name: p for p in pred_files}
+        pairs = [(gt_fp, pred_map[gt_fp.name]) for gt_fp in gt_files if gt_fp.name in pred_map]
+        if not pairs:
+            raise ValueError("No filename overlap between ground truths and predictions.")
+        if len(pairs) < len(gt_files):
+            missing = {p.name for p in gt_files} - set(pred_map.keys())
+            print(f"Warning: {len(missing)} GT files missing predictions (e.g., {next(iter(missing))})")
+
+
+        # --- DICE ---
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        dice_metric = DiceMetric(include_background=False, reduction="none")
+
+        scores, names = [], []
+        print(f"Total evaluated pairs: {len(pairs)}  |  Device: {device}")
+        for idx, (gt_fp, pred_fp) in enumerate(tqdm(pairs, desc="Evaluating DICE")):
+            gt_gray = load_png(gt_fp)
+            pr_gray = load_png(pred_fp)
+
+            # binarize: non-zero -> 1
+            gt_bin = (gt_gray > 0).to(torch.uint8)
+            pr_bin = (pr_gray > 0).to(torch.uint8)
+
+            # skip empty GT masks
+            if gt_bin.sum() == 0:
+                continue
+
+            y = to_one_hot(gt_bin).to(device)  # [1,2,H,W]
+            y_pred = to_one_hot(pr_bin).to(device)
+
+            dice = dice_metric(y_pred, y).item()
+            scores.append(float(dice))
+            names.append(gt_fp.name)
+
+            # save summary
+            RESULTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(RESULTS_FILE, "w") as f:
+            for n, s in zip(names, scores):
+                f.write(f"{n}: Dice = {s:.4f}\n")
+
+            if scores:
+                arr = np.array(scores, dtype=float)
+                f.write("\n==== Summary Statistics ====\n")
+                f.write(f"Samples Evaluated       : {len(arr)}\n")
+                f.write(f"Mean Dice               : {arr.mean():.4f}\n")
+                f.write(f"Median Dice             : {np.median(arr):.4f}\n")
+                f.write(f"Std Dev Dice            : {arr.std():.4f}\n")
+                f.write(f"Min Dice                : {arr.min():.4f}\n")
+                f.write(f"Max Dice                : {arr.max():.4f}\n")
+                f.write(f"Dice > 0.90             : {(arr > 0.9).mean() * 100:.2f}%\n")
+                f.write(f"Dice > 0.80             : {(arr > 0.8).mean() * 100:.2f}%\n")
+
+        print(f"Saved DICE summary to: {RESULTS_FILE}")
+
+
+    def _generate_segmentations(self, experiment_id: str) -> None:
+        images_dir = Path(self.output_dir) / "Images"
+        seg_dir = Path(self.output_dir) / "SegmentationPreds"
+
+        # iterate all images in output_dir/Images
+        exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+        img_files = [p for p in images_dir.iterdir() if p.suffix.lower() in exts]
+        if not img_files:
+            raise FileNotFoundError(f"No images found in {images_dir}")
+
+        # if SegmentationPreds already exists with files, move to Old/<timestamp>
+        if seg_dir.exists() and any(seg_dir.iterdir()):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive_dir = Path(self.output_dir) / "Old" / f"SegmentationPreds_{timestamp}"
+            archive_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(seg_dir), str(archive_dir))
+            print(f"Moved old predictions to {archive_dir}")
+
+
+        seg_dir.mkdir(parents=True, exist_ok=True)
+
+        # load model + processor once
+        model_id = "pamixsun/segformer_for_optic_disc_cup_segmentation"
+        processor = AutoImageProcessor.from_pretrained(model_id)
+        model = SegformerForSemanticSegmentation.from_pretrained(model_id).to(self.device).eval()
+
+
+
+        for img_path in tqdm(img_files, desc="Segmenting generated images"):
+            # force 3-channel (model expects RGB)
+            bgr = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
+            if bgr is None:
+                continue
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+            inputs = processor(rgb, return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                logits = model(**inputs).logits
+                up = nn.functional.interpolate(
+                    logits, size=rgb.shape[:2], mode="bilinear", align_corners=False
+                )
+                pred = up.argmax(dim=1)[0]  # (H,W), class ids
+
+            # save with same filename in SegmentationPreds
+            out_path = seg_dir / img_path.name
+            plt.imsave(out_path, pred.detach().cpu().numpy(), cmap="gray", vmin=0, vmax=2)

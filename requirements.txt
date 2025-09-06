@@ -8,3 +8,6 @@ six==1.17.0
 protobuf==6.31.1
 sentencepiece==0.2.0
 monai-weekly[tqdm]
+nibabel==5.3.2
+einops==0.8.1
+scikit-learn==1.7.1

@@ -1,7 +1,8 @@
 import os
 import sqlite3
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
+from pathlib import Path
 
 from PIL import Image
 import numpy as np
@@ -12,6 +13,15 @@ import dmcaf.prompt_to_prompt.ptp_utils as PtpUtilsUnet
 from . prompt_to_prompt.transformer_2d import Transformer2DModel
 import dmcaf.prompt_to_prompt.ptp_utils_dit as PtpUtilsTransformer
 import gc
+
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader
+from monai.data import Dataset
+from monai import transforms as T
+from dmcaf.models_fundus import get_model, get_controlnet, get_scheduler, get_inferers, SEED
+from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 class DMRunner:
     def __init__(self, conditioning_db_path: str, output_db_path: str, output_dir: str,visualize_cfg: Dict[str, Any] = None):
@@ -319,3 +329,209 @@ class DMRunner:
             conditions.append(filters["custom_where"])
         
         return " AND ".join(conditions) if conditions else ""
+
+class DMRunner_Fundus:
+    def __init__(self, monai_home: str, output_dir: str):
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.monai_home = monai_home
+        self.output_dir = output_dir
+        self.BATCH_SIZE = 32
+        self.IMG_SIZE = 128
+        self.NUM_WORKERS = 4
+        self.SEED = 42
+
+        # fundus transforms
+        self.fundus_tf = T.Compose([
+            T.LoadImaged(keys=["image", "mask"]),
+            T.EnsureChannelFirstd(keys=["image", "mask"]),
+            T.EnsureTyped(keys=["image", "mask"]),
+            T.Lambdad(keys="image", func=lambda x: x.mean(dim=0, keepdim=True)),
+            T.ResizeD(keys=["image", "mask"],
+                      spatial_size=(self.IMG_SIZE, self.IMG_SIZE),
+                      mode=("bilinear", "nearest")),
+            T.ScaleIntensityRangePercentilesd(keys="image", lower=0, upper=99.5, b_min=0, b_max=1),
+            T.CastToTyped(keys=["image", "mask"], dtype=np.float32),
+        ])
+
+
+
+    def run_experiment(self, experiment_id: str, model_configs: List[Dict[str, Any]], condition_sets: List[Dict[str, Any]]):
+
+        # --- create experiment directories ---
+        exp_dir = Path(self.output_dir)
+        masks_dir = exp_dir / "Masks"
+        images_dir = exp_dir / "Images"
+        masks_dir.mkdir(parents=True, exist_ok=True)
+        images_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- collect data from condition_sets ---
+        val_data = {}
+        for cs in condition_sets:
+            cs_id = cs["condition_set_id"]
+            limit = cs.get("limit_number_of_conditions")
+            types = cs.get("types", [])
+
+            if "segmentation_mask" not in types:
+                raise ValueError(f"Error in {cs_id}: unknown type(s) {types}")
+
+            if cs_id == "fundus":
+                _, val_ds, _, val_loader = self._get_datasets_and_loaders(
+                    batch_size=self.BATCH_SIZE,
+                    num_workers=self.NUM_WORKERS,
+                    verbose=True,
+                    dataset="fundus",
+                    data_dir=None,  # uses self.monai_home/datasets by default
+                )
+                val_data[cs_id] = (val_ds, val_loader)
+            else:
+                raise ValueError(f"Error in {cs_id}: unknown condition_set_id {cs_id}")
+
+        # --- loop over models ---
+        for config in model_configs:
+            model_name = config['model_name'].lower()
+            num_inference_steps = config.get('num_inference_steps', 1000)
+            seed = config.get('seed', 42)
+
+            if model_name != "unet":
+                raise ValueError(f"Unsupported model_name: {model_name}")
+
+            for cs_id, (val_ds, val_loader) in val_data.items():
+                # --- build checkpoint paths ---
+                model_ckpt_path = Path(self.monai_home) / "hub" / "DiffusionModelUNet" / f"best_model_{cs_id}.pth"
+                cn_ckpt_path = Path(
+                    self.monai_home) / "hub" / "ControlNet_DiffusionModelUNet" / f"best_model_{cs_id}.pth"
+
+                # --- build & load models in fp16 + eval ---
+                model = get_model(self.device, in_channels=1, out_channels=1,
+                                  dtype=torch.float16, ckpt_path=str(model_ckpt_path),
+                                  eval_mode=True, freeze=True)
+                controlnet = get_controlnet(self.device, model, in_channels=1,
+                                            dtype=torch.float16, ckpt_path=str(cn_ckpt_path),
+                                            init_from_unet=True, eval_mode=True)
+
+                # --- scheduler ---
+                scheduler = get_scheduler(num_train_steps=num_inference_steps)
+                # if available, set explicit timesteps once
+                if hasattr(scheduler, "set_timesteps"):
+                    scheduler.set_timesteps(num_inference_steps)
+
+                # --- optional determinism for sampling ---
+                g = torch.Generator(device=self.device).manual_seed(seed)
+
+                with torch.inference_mode(), torch.cuda.amp.autocast(dtype=torch.float16):
+                    for batch_idx, val_batch in enumerate(val_loader):
+
+                        val_masks = val_batch["mask"].to(self.device, dtype=torch.float16)
+
+                        n = val_masks.shape[0]
+                        sample = torch.randn((n, 1, self.IMG_SIZE, self.IMG_SIZE),
+                                             device=self.device, dtype=torch.float16, generator=g)
+                        t_tensor = torch.empty(n, device=self.device, dtype=torch.long)
+
+                        for t in tqdm(scheduler.timesteps, desc=f"Sampling batch {batch_idx}", leave=False):
+                            t_tensor.fill_(int(t))
+                            down_res, mid_res = controlnet(
+                                x=sample, timesteps=t_tensor, controlnet_cond=val_masks
+                            )
+                            noise_pred = model(
+                                sample,
+                                timesteps=t_tensor,
+                                down_block_additional_residuals=down_res,
+                                mid_block_additional_residual=mid_res,
+                            )
+                            sample, _ = scheduler.step(model_output=noise_pred, timestep=t, sample=sample)
+
+                        # --- save after sampling ---
+                        for i in range(n):
+                            mask_img = val_masks[i, 0].float().cpu().numpy()
+                            result_img = sample[i, 0].float().cpu().numpy()
+                            plt.imsave(masks_dir / f"mask_{batch_idx}_{i}.png",
+                                       mask_img, cmap="gray", vmin=0, vmax=1)
+                            plt.imsave(images_dir / f"generated_{batch_idx}_{i}.png",
+                                       result_img, cmap="gray", vmin=0, vmax=1)
+
+                        # free
+                        del val_masks, sample, noise_pred, down_res, mid_res, t_tensor
+                        torch.cuda.empty_cache()
+                del model, controlnet
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+        pass
+
+    def _get_datasets_and_loaders(self,
+                                  batch_size: Optional[int] = None,
+                                  num_workers: Optional[int] = None,
+                                  verbose: bool = True,
+                                  dataset: str = "fundus",
+                                  data_dir: Optional[Path] = None):
+        """
+        dataset: supports "fundus"
+        data_dir:
+          - If None: uses Path(self.monai_home)/'datasets' when available,
+                     else falls back to Path.cwd()/'datasets'
+          - If provided: used as the datasets root
+        """
+        batch_size = batch_size or self.BATCH_SIZE
+        num_workers = num_workers or self.NUM_WORKERS
+
+        # Determine datasets root
+        if data_dir is not None:
+            root = Path(data_dir)
+        else:
+            root = Path(self.monai_home).joinpath("datasets") if self.monai_home else Path.cwd().joinpath("datasets")
+        root.mkdir(parents=True, exist_ok=True)
+
+        if dataset.lower() == "fundus":
+            train_list, val_list = self._build_fundus_lists(data_dir=root, verbose=verbose, seed=self.SEED)
+            train_ds = Dataset(train_list, transform=self.fundus_tf)
+            val_ds = Dataset(val_list, transform=self.fundus_tf)
+        else:
+            raise ValueError(f"dataset must be 'fundus', got '{dataset}'")
+
+        persistent = num_workers > 0
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                                  num_workers=num_workers, drop_last=True, persistent_workers=persistent)
+        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
+                                num_workers=num_workers, drop_last=True, persistent_workers=persistent)
+
+        return train_ds, val_ds, train_loader, val_loader
+
+    @staticmethod
+    def _build_fundus_lists( data_dir: Path,
+                            verbose: bool = True,
+                            test_size: float = 0.2,
+                            seed: int = 42) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+
+        fundus_dir = data_dir / "Fundus"
+        csv_path = fundus_dir / "metadata - standardized.csv"
+        df = pd.read_csv(csv_path)
+        if not csv_path.is_file():
+            raise FileNotFoundError(f"Missing CSV for fundus images: {csv_path}")
+
+        # keep only rows with mask
+        df = df[df["fundus_od_seg"].notna()].reset_index(drop=True)
+
+        def resolve(rel_path: str) -> str:
+            rel_path = rel_path.strip().lstrip("/")  # normalize
+            return str(fundus_dir / rel_path)
+
+        img_paths = df["fundus"].apply(resolve)
+        mask_paths = df["fundus_od_seg"].apply(resolve)
+
+        items = [
+            {"image": i, "mask": m}
+            for i, m in zip(img_paths, mask_paths)
+            if Path(i).is_file() and Path(m).is_file()
+        ]
+
+        if verbose:
+            print(f"Total with masks in CSV: {len(df)}")
+            print(f"Valid image-mask pairs: {len(items)}")
+
+        train_items, val_items = train_test_split(
+            items, test_size=test_size, random_state=seed, shuffle=True
+        )
+
+        return train_items, val_items
