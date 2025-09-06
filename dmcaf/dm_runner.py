@@ -6,7 +6,7 @@ from typing import Dict, Any, List
 from PIL import Image
 import numpy as np
 import torch
-from diffusers import StableDiffusionPipeline, StableDiffusion3Pipeline, DPMSolverMultistepScheduler, DDIMScheduler, PNDMScheduler, AutoencoderKL
+from diffusers import StableDiffusionControlNetPipeline, StableDiffusionPipeline, StableDiffusion3Pipeline, DPMSolverMultistepScheduler, DDIMScheduler, PNDMScheduler, AutoencoderKL
 from . prompt_to_prompt.sd_attention_google import AttentionStore, show_cross_attention, run_and_display
 from . prompt_to_prompt.ptp_utils import view_images
 
@@ -113,6 +113,18 @@ class DMRunner:
 
             if "stable-diffusion-3" in model_name:
                pipe = StableDiffusion3Pipeline.from_pretrained(model_name, torch_dtype=torch.float16)
+            if "laparoscopic" in model_name:
+                # TODO: Move paths to config
+                CONTROLNET_PATH = "/mnt/projects/mlmi/dmcaf_laparoscopic/models/ControlNet/checkpoint-75000/controlnet"
+                STABLEDIFFUSION_PATH = "/mnt/projects/mlmi/dmcaf_laparoscopic/models/StableDiffusion"
+                controlnet = ControlNetModel.from_pretrained(CONTROLNET_PATH, torch_dtype=torch.float16, use_safetensors=True)
+                pipe = StableDiffusionControlNetPipeline.from_pretrained(
+                    STABLEDIFFUSION_PATH,
+                    controlnet=controlnet,
+                    torch_dtype=torch.float16,
+                    use_safetensors=True,
+                    safety_checker=None
+                )
             else:
                 pipe = StableDiffusionPipeline.from_pretrained(model_name, **pipeline_kwargs)
 
@@ -140,6 +152,17 @@ class DMRunner:
                     if visualize:
                         print("Warning: visualizing corss-attention not yet supported for ViT nased models (SD3+)")
                     image = pipe(prompt, guidance_scale=guidance_scale, num_inference_steps=num_inference_steps).images[0]
+                if "laparoscopic" in model_name:
+                    if visualize:
+                        print("Warning: visualizing corss-attention not yet supported for ControlNet Model")
+                    # TODO: load controlnet image from condition set
+                    image = pipe(prompt,
+                                 image=ctrl_img,
+                                 height=128,
+                                 width=128,
+                                 num_inference_steps=100,
+                                 guidance_scale=3,
+                                 num_images_per_prompt=1).images[0]
                 else:
                     controller = AttentionStore()
                     # inference with prompt-to-prompt
