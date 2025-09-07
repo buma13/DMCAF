@@ -36,6 +36,15 @@ Run an experiment that references one or more condition sets:
 ```
 python run_experiment.py config/experiments/experiment_000.yaml
 ```
+Run analysis after running count experiments:
+```
+python run_analysis.py --count --experiment-id <Experiment ID>
+```
+or color experiments:
+```
+python run_analysis.py --color --experiment-id <Experiment ID>
+```
+
 
 ## Time Planing
 ```mermaid
@@ -82,7 +91,7 @@ gantt
 - [ ] Evaluation: implement sores IS, CLIP
 - [ ] More Parameters for DM runner (We have: guidance scale, inference steps, add: Scheduler, Seed, Number of images, Image Dimensions, Negative Prompt (ad to condition generator vs. fixed set e.g. blurry, unrealistic))
 
-FILE STRUCTURE:
+### FILE STRUCTURE:
     - DMCAF/
         - assets/
         - config/
@@ -90,3 +99,9 @@ FILE STRUCTURE:
         - medical_image/
     - models/
     - data/ (OUTPUT_DIRECTORY)
+        - experiment_xxx/  ## Generated images
+        - analysis/  ## Plots and Results
+        - conditioning.db ## SQLite DB storing the type and content of conditioning used
+        - dm_output.db ## SQLite DB storing the paths and generation details of images
+        - metrics.db ## SQLite DB storing the evaluation details of images
+    - yolo_outputs/count/ ## YOLO segmentations of images for counting target objects

@@ -1,0 +1,1 @@
+"""Color analysis plot generation."""

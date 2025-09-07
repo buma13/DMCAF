@@ -282,7 +282,6 @@ class Hypothesis2Analyzer(BaseHypothesisAnalyzer):
                         label='Numeral', color='#DC143C', capsize=5, capthick=2)
             
             # Mark significant differences at each count level
-            significance_found = False
             y_max_data = max(base_data['mean_acc'].max(), numeral_data['mean_acc'].max())
             for count in sorted(base_data['expected_count'].unique()):
                 base_acc = variant_data[(variant_data['variant'] == 'base') & 
@@ -292,9 +291,7 @@ class Hypothesis2Analyzer(BaseHypothesisAnalyzer):
                 
                 if len(base_acc) > 0 and len(num_acc) > 0:
                     _, p_val = ttest_ind(base_acc, num_acc, equal_var=False)
-                    print(f"Count {count}: p-value = {p_val:.4f}, significant = {p_val < 0.05}")
                     if p_val < 0.05:
-                        significance_found = True
                         # Mark significant differences with a star
                         base_mean = base_acc.mean()
                         num_mean = num_acc.mean()
@@ -304,9 +301,6 @@ class Hypothesis2Analyzer(BaseHypothesisAnalyzer):
                         ax4.text(count, y_pos, '*', ha='center', va='bottom', 
                                 fontsize=20, fontweight='bold', color=color)
             
-            # Debug message
-            if not significance_found:
-                print("No significant differences found at any count level")
             
             ax4.set_xlabel('Expected Count')
             ax4.set_ylabel('Mean Accuracy ± SE')

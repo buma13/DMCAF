@@ -1,8 +1,7 @@
-import ultralytics
 from ultralytics import YOLO
 import cv2
 import numpy as np
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, Dict, Any
 
 class ObjectCounter:
     def __init__(self, model_path='yolo11m-seg.pt'):
@@ -38,7 +37,10 @@ class ObjectCounter:
         predict_kwargs = {
             'verbose': False, 
             'save': True,
-            'conf': conf_threshold
+            'conf': conf_threshold,
+            'project': "yolo_outputs",
+            'name': 'count',
+            'exist_ok': True
         }
         
         # Add class filtering if target_class_id is specified
@@ -91,13 +93,15 @@ class ObjectCounter:
 
 __main__ = "__main__"
 if __name__ == "__main__":
-    # Example usage
-    image_path = 'C:\\Users\\meric\\Documents\\GitHub\\DMCAF\\image (9).png' # Please update this path
-    # model_path = 'yolov8n.pt' # Optional: Path to your YOLO model
+    import requests
+    from PIL import Image
+    url = "https://farm9.staticflickr.com/8124/8687257944_378b3b87bd_z.jpg"
+    image = Image.open(requests.get(url, stream=True).raw)
+    image.save("example_image_count.png")
     counter = ObjectCounter()
     # Example 1: Count all objects
-    total_count = counter.count_objects_in_image(image_path)
+    total_count = counter.count_objects_in_image("example_image_count.png")
     print(f"Total number of objects detected: {total_count}")
     # Example 2: Count specific objects
-    specific_count = counter.count_objects_in_image(image_path, target_object='bottle')
-    print(f"Number of bottles detected: {specific_count}")
+    specific_count = counter.count_objects_in_image("example_image_count.png", target_object='banana')
+    print(f"Number of bananas detected: {specific_count}")

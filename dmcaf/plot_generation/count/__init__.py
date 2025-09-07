@@ -1,0 +1,1 @@
+"""Count analysis plot generation."""
