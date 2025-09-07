@@ -65,8 +65,8 @@ class ObjectColorClassifier:
 if __name__ == "__main__":
     url = "http://images.cocodataset.org/val2017/000000039769.jpg"
     image = Image.open(requests.get(url, stream=True).raw)
-    image.save("example_image.png")
+    image.save("example_image_color.png")
     classifier = ObjectColorClassifier()
-    color, confidence = classifier.classify_color("example_image.png", "cat")
+    color, confidence = classifier.classify_color("example_image_color.png", "cat")
     print(f"Predicted color: {color} with confidence: {confidence:.2f}")
 

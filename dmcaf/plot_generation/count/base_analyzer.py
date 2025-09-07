@@ -57,26 +57,65 @@ class BaseHypothesisAnalyzer:
         self.output_dir.mkdir(exist_ok=True, parents=True)
         self.df = None
         self.hypothesis_results = {}
+        self.load_error = None
         
     def load_data(self):
-        """Load and preprocess data from SQLite database."""
-        conn = sqlite3.connect(self.metrics_db_path)
-        
-        # Load comprehensive evaluation data
-        self.df = pd.read_sql_query("""
-            SELECT 
-                model_name, variant, target_object, expected_count, detected_count,
-                count_accuracy, pixel_ratio, coverage_percentage, 
-                target_pixels, total_pixels, image_path,
-                guidance_scale, num_inference_steps, condition_type,
-                segmented_pixels_in_bbox, total_bbox_pixels,
-                bbox_pixel_ratios, min_bbox_pixel_ratio, max_bbox_pixel_ratio, std_bbox_pixel_ratio
-            FROM image_evaluations
-            WHERE expected_count IS NOT NULL AND count_accuracy IS NOT NULL
-        """, conn)
-        conn.close()
+        """Load and preprocess data from SQLite database with schema checks."""
+        try:
+            conn = sqlite3.connect(self.metrics_db_path)
+
+            # Discover available columns in image_evaluations
+            pragma = pd.read_sql_query("PRAGMA table_info('image_evaluations')", conn)
+            if pragma.empty:
+                self.load_error = "Table 'image_evaluations' not found in metrics DB"
+                self.df = None
+                conn.close()
+                return
+            available_cols = set(pragma['name'].tolist())
+
+            # Minimal required columns to run count analyses end-to-end
+            required_cols = {
+                'model_name', 'variant', 'target_object', 'expected_count', 'detected_count',
+                'count_accuracy', 'image_path', 'bbox_pixel_ratios'
+            }
+            if not required_cols.issubset(available_cols):
+                missing = sorted(required_cols - available_cols)
+                self.load_error = f"Missing required columns for count analysis: {', '.join(missing)}"
+                self.df = None
+                conn.close()
+                return
+
+            # Columns we prefer to fetch if present
+            optional_cols = [
+                'pixel_ratio', 'coverage_percentage', 'target_pixels', 'total_pixels',
+                'guidance_scale', 'num_inference_steps', 'condition_type',
+                'segmented_pixels_in_bbox', 'total_bbox_pixels',
+                'min_bbox_pixel_ratio', 'max_bbox_pixel_ratio', 'std_bbox_pixel_ratio'
+            ]
+
+            select_cols = [
+                'model_name', 'variant', 'target_object', 'expected_count', 'detected_count',
+                'count_accuracy', 'image_path', 'bbox_pixel_ratios'
+            ] + [c for c in optional_cols if c in available_cols]
+
+            query = (
+                "SELECT " + ", ".join(select_cols) +
+                " FROM image_evaluations WHERE expected_count IS NOT NULL AND count_accuracy IS NOT NULL"
+            )
+
+            self.df = pd.read_sql_query(query, conn)
+            conn.close()
+        except Exception as e:
+            self.load_error = f"Failed to load metrics: {e}"
+            self.df = None
+            try:
+                conn.close()
+            except Exception:
+                pass
         
         # Clean and prepare data
+        if self.df is None:
+            return
         self.df['model_short'] = (
             self.df['model_name']
             .str.split('/').str[-1]
@@ -92,7 +131,8 @@ class BaseHypothesisAnalyzer:
         ].copy()
         
         # Extract confidence data from bbox_pixel_ratios JSON
-        self.df['has_high_confidence_objects'] = self.df['bbox_pixel_ratios'].apply(self._extract_confidence_info)
+        if 'bbox_pixel_ratios' in self.df.columns:
+            self.df['has_high_confidence_objects'] = self.df['bbox_pixel_ratios'].apply(self._extract_confidence_info)
         
         # Check for potential sorting issues in database
         self._check_data_distribution()

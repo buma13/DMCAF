@@ -72,7 +72,8 @@ class Hypothesis6Analyzer(BaseHypothesisAnalyzer):
         }
         
         # Create analysis plot
-        self._plot_suspicion_analysis(suspicious_df)
+        if len(suspicious_df) > 0:
+            self._plot_suspicion_analysis(suspicious_df)
         
         # Determine if hypothesis is verified
         overdetection_enriched = (suspicion_stats['over_mean'] > suspicion_stats['correct_mean']) if suspicion_stats['correct_mean'] > 0 else False
@@ -241,7 +242,7 @@ class Hypothesis6Analyzer(BaseHypothesisAnalyzer):
         filename = image_path.stem + '.jpg'
         
         # Construct YOLO output path
-        yolo_path = Path('runs/segment/predict2') / filename
+        yolo_path = Path('yolo_outputs/count') / filename
         
         # Make it absolute based on current working directory
         return Path.cwd() / yolo_path
