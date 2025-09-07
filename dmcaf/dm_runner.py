@@ -6,9 +6,12 @@ from typing import Dict, Any, List
 from PIL import Image
 import numpy as np
 import torch
-from diffusers import StableDiffusionPipeline, StableDiffusion3Pipeline, DPMSolverMultistepScheduler, DDIMScheduler, PNDMScheduler, AutoencoderKL
-from . prompt_to_prompt.sd_attention_google import AttentionStore, show_cross_attention, run_and_display
-from . prompt_to_prompt.ptp_utils import view_images
+import copy
+from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler, PNDMScheduler, AutoencoderKL, PixArtAlphaPipeline,StableDiffusion3Pipeline
+import dmcaf.prompt_to_prompt.ptp_utils as PtpUtilsUnet
+from . prompt_to_prompt.transformer_2d import Transformer2DModel
+import dmcaf.prompt_to_prompt.ptp_utils_dit as PtpUtilsTransformer
+import gc
 
 class DMRunner:
     def __init__(self, conditioning_db_path: str, output_db_path: str, output_dir: str,visualize_cfg: Dict[str, Any] = None):
@@ -38,9 +41,12 @@ class DMRunner:
     def run_experiment(self, experiment_id: str, model_configs: List[Dict[str, Any]], visualizer_configs: List[Dict[str, Any]],condition_sets: List[Dict[str, Any]] | None = None):
         cursor = self.conditioning_conn.cursor()
         conditions = []
+        gc.collect()  # Clear any previous garbage collection to free up memory
+        torch.cuda.empty_cache()
         #setup visualizer
         visualizer_configs = visualizer_configs or {}
         visualize = visualizer_configs.get('visualize', False)
+        dit = visualizer_configs.get('dit', False)
         cross_attention_cfg = visualizer_configs.get('cross_attention', {})
         if condition_sets:
             for cs in condition_sets:
@@ -103,47 +109,36 @@ class DMRunner:
             guidance_scale = config.get('guidance_scale', 7.5)
             num_inference_steps = config.get('num_inference_steps', 50)
             generator = torch.Generator(device="cpu").manual_seed(config.get('seed', 42))
-
-            print(f"Loading model: {model_name}")
-
-            pipeline_kwargs = {}
+            pipeline_kwargs = {} # Additional kwargs for pipeline initialization
             if vae_name:
                 print(f"Loading VAE: {vae_name}")
                 pipeline_kwargs['vae'] = AutoencoderKL.from_pretrained(vae_name)
 
-            if "stable-diffusion-3" in model_name:
-               pipe = StableDiffusion3Pipeline.from_pretrained(model_name, torch_dtype=torch.float16)
-            else:
+            # run standard dm_runner for unet-based models
+            if not dit and not ("stable-diffusion-3" in model_name): 
+                print(f"Loading model: {model_name}")
+
                 pipe = StableDiffusionPipeline.from_pretrained(model_name, **pipeline_kwargs)
+                pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
 
-            pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+                if scheduler_name:
+                    scheduler_class = {
+                        "DPMSolverMultistepScheduler": DPMSolverMultistepScheduler,
+                        "DDIMScheduler": DDIMScheduler,
+                        "PNDMScheduler": PNDMScheduler,
+                    }.get(scheduler_name)
 
-            if scheduler_name:
-                scheduler_class = {
-                    "DPMSolverMultistepScheduler": DPMSolverMultistepScheduler,
-                    "DDIMScheduler": DDIMScheduler,
-                    "PNDMScheduler": PNDMScheduler,
-                }.get(scheduler_name)
+                    if scheduler_class:
+                        print(f"Using scheduler: {scheduler_name}")
+                        pipe.scheduler = scheduler_class.from_config(pipe.scheduler.config)
+                    else:
+                        print(f"Warning: Scheduler '{scheduler_name}' not found. Using pipeline default.")
 
-                if scheduler_class:
-                    print(f"Using scheduler: {scheduler_name}")
-                    pipe.scheduler = scheduler_class.from_config(pipe.scheduler.config)
-                else:
-                    print(f"Warning: Scheduler '{scheduler_name}' not found. Using pipeline default.")
-
-            pipe.scheduler.set_timesteps(num_inference_steps)
-
-            for condition_id, prompt, condition_type in conditions:
-                print(f"[{model_name}] Generating: {prompt} (type: {condition_type}, guidance={guidance_scale}, steps={num_inference_steps})")
-
-                if "stable-diffusion-3" in model_name:
-                    if visualize:
-                        print("Warning: visualizing corss-attention not yet supported for ViT nased models (SD3+)")
-                    image = pipe(prompt, guidance_scale=guidance_scale, num_inference_steps=num_inference_steps).images[0]
-                else:
-                    controller = AttentionStore()
-                    # inference with prompt-to-prompt
-                    images, _ = run_and_display(
+                pipe.scheduler.set_timesteps(num_inference_steps)
+                # inference with prompt-to-prompt
+                for condition_id, prompt, _ in conditions:
+                    controller = PtpUtilsUnet.AttentionStore()
+                    images, _ = PtpUtilsUnet.run_and_display(
                         ldm_stable=pipe,
                         prompts=[prompt],
                         controller=controller,
@@ -155,40 +150,82 @@ class DMRunner:
                         low_resource=low_resource,
                         output_dir=self.output_dir
                     )
-                    image = images[0]
 
-                image_path = self._save_image(
-                    experiment_id=experiment_id,
-                    model_name=model_name,
-                    condition_id=condition_id,
-                    image=image,
-                    visualize=False,
-                    guidance_scale=guidance_scale,
-                    num_inference_steps=num_inference_steps)
-                self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path,visualize=False)
-                # If visualization is enabled, show cross-attention maps
-                if visualize:
-                    print(f"[{model_name}] Visualizing cross-attention for: {prompt}")
-                    cross_attention_images=show_cross_attention(
-                        tokenizer=pipe.tokenizer,
-                        prompts=[prompt],
-                        attention_store=controller,
-                        res=cross_attention_cfg.get("res", 16),
-                        from_where=tuple(cross_attention_cfg.get("from_where", ["up", "down"])),
-                        select=cross_attention_cfg.get("select", 0),
-                    )
-                    # Convert cross-attention images to a format suitable for saving
-                    attention_format_images=view_images((cross_attention_images), num_rows=1, offset_ratio=0.02)
+                    image = images[0]
                     image_path = self._save_image(
                         experiment_id=experiment_id,
                         model_name=model_name,
                         condition_id=condition_id,
-                        image=attention_format_images,
-                        visualize=True,
+                        image=image,
+                        visualize=False,
                         guidance_scale=guidance_scale,
                         num_inference_steps=num_inference_steps)
-                    self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path, visualize=True)
+                    self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path,visualize=False)
+                    # If visualization is enabled, show cross-attention maps
+                    if visualize:
+                        print(f"[{model_name}] Visualizing cross-attention for: {prompt}")
+                        cross_attention_images=PtpUtilsUnet.show_cross_attention(
+                            tokenizer=pipe.tokenizer,
+                            prompts=[prompt],
+                            attention_store=controller,
+                            res=cross_attention_cfg.get("res", 16),
+                            from_where=tuple(cross_attention_cfg.get("from_where", ["up", "down"])),
+                            select=cross_attention_cfg.get("select", 0),
+                        )
+                        # Convert cross-attention images to a format suitable for saving
+                        attention_format_images=PtpUtilsUnet.view_images((cross_attention_images), num_rows=1, offset_ratio=0.02)
+                        image_path = self._save_image(
+                            experiment_id=experiment_id,
+                            model_name=model_name,
+                            condition_id=condition_id,
+                            image=attention_format_images,
+                            visualize=True,
+                            guidance_scale=guidance_scale,
+                            num_inference_steps=num_inference_steps)
+                        self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path, visualize=True)
 
+            # run dit model with transformer backbone, we currently support sd-3 med, sd-3.5 med and PixArt-XL.
+            else:
+                if "stable-diffusion-3" in model_name:
+                    pipe = StableDiffusion3Pipeline.from_pretrained(model_name, torch_dtype=torch.float16)
+                    
+                else: # assume PixArt-XL because we only support this additionally to 3 and 3.5. Also it takes more steps to load the model.
+                    model_name="PixArt-alpha/PixArt-XL-2-512x512"
+                    pixart_transformer = Transformer2DModel.from_pretrained(model_name, subfolder="transformer",torch_dtype=torch.float16,)
+                    pipe = PixArtAlphaPipeline.from_pretrained(
+                    model_name, 
+                    transformer = pixart_transformer,
+                    torch_dtype=torch.float16)
+                print(f"Loading model: {model_name}")
+                pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+                #pipe.enable_attention_slicing()
+             
+
+                for condition_id, prompt, _ in conditions:
+                    print(f"[{model_name}] Generating: {prompt} (guidance={guidance_scale}, steps={num_inference_steps})")
+                    #since visualization needs the controller, and only PixArt-XL supports it for now, we only create the controller for this model.
+                    if model_name=="PixArt-alpha/PixArt-XL-2-512x512":
+                        controller = PtpUtilsTransformer.AttentionStore()
+                        PtpUtilsTransformer.register_attention_control(pipe,controller)
+                    
+                    images = pipe(prompt=prompt,height=512,width=512).images[0]
+                    model_tag = model_name.replace("/", "_")
+                    if visualize and model_name=="PixArt-alpha/PixArt-XL-2-512x512":
+                        for i in range(28):
+                            attn_map = PtpUtilsTransformer.get_self_attention_map(controller,256,i,False)
+                            transform_attn_maps = copy.deepcopy(attn_map)
+                            path = os.path.join(self.output_dir, f'self_attn_maps_{model_tag}_cond{condition_id}')
+                            PtpUtilsTransformer.visualize_and_save_features_pca(
+                                    torch.cat([attn_map], dim=0),
+                                    torch.cat([transform_attn_maps], dim=0),
+                                    ['debug'],
+                                    i,
+                                    path
+                                )
+                    filename = f"{experiment_id}_{model_tag}_cond{condition_id}.png"
+                    path = os.path.join(self.output_dir, filename)
+                    images.save(path)
+                
 
 
 
