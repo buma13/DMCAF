@@ -115,7 +115,7 @@ class DMRunner:
                 pipeline_kwargs['vae'] = AutoencoderKL.from_pretrained(vae_name)
 
             # run standard dm_runner for unet-based models
-            if not dit: 
+            if not dit and not ("stable-diffusion-3" in model_name): 
                 print(f"Loading model: {model_name}")
 
                 pipe = StableDiffusionPipeline.from_pretrained(model_name, **pipeline_kwargs)
@@ -184,38 +184,45 @@ class DMRunner:
                             num_inference_steps=num_inference_steps)
                         self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path, visualize=True)
 
-            # run dit model with transformer backbone, we currently support PixArt-XL. That's why the model name is fixed.
+            # run dit model with transformer backbone, we currently support sd-3 med, sd-3.5 med and PixArt-XL.
             else:
-                print(f"Loading model: PixArt-alpha/PixArt-XL-2-512x512")
-                pixart_transformer = Transformer2DModel.from_pretrained("PixArt-alpha/PixArt-XL-2-512x512", subfolder="transformer",torch_dtype=torch.float16,)
-                pipe = PixArtAlphaPipeline.from_pretrained(
-                    "PixArt-alpha/PixArt-XL-2-512x512", 
+                if "stable-diffusion-3" in model_name:
+                    pipe = StableDiffusion3Pipeline.from_pretrained(model_name, torch_dtype=torch.float16)
+                    
+                else: # assume PixArt-XL because we only support this additionally to 3 and 3.5. Also it takes more steps to load the model.
+                    model_name="PixArt-alpha/PixArt-XL-2-512x512"
+                    pixart_transformer = Transformer2DModel.from_pretrained(model_name, subfolder="transformer",torch_dtype=torch.float16,)
+                    pipe = PixArtAlphaPipeline.from_pretrained(
+                    model_name, 
                     transformer = pixart_transformer,
                     torch_dtype=torch.float16)
-                print(conditions)
-                pipe = pipe.to("cuda")
-                pipe.enable_attention_slicing()
+                print(f"Loading model: {model_name}")
+                pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+                #pipe.enable_attention_slicing()
              
 
                 for condition_id, prompt, _ in conditions:
                     print(f"[{model_name}] Generating: {prompt} (guidance={guidance_scale}, steps={num_inference_steps})")
-                    controller = PtpUtilsTransformer.AttentionStore()
-                    PtpUtilsTransformer.register_attention_control(pipe,controller)
-                    images = pipe(prompt=prompt,negative_prompt="",height=512,width=512).images[0]
+                    #since visualization needs the controller, and only PixArt-XL supports it for now, we only create the controller for this model.
+                    if model_name=="PixArt-alpha/PixArt-XL-2-512x512":
+                        controller = PtpUtilsTransformer.AttentionStore()
+                        PtpUtilsTransformer.register_attention_control(pipe,controller)
                     
-
-                    for i in range(28):
-                        attn_map = PtpUtilsTransformer.get_self_attention_map(controller,256,i,False)
-                        transform_attn_maps = copy.deepcopy(attn_map)
-                        path = os.path.join(self.output_dir, 'self_attn_maps')
-                        PtpUtilsTransformer.visualize_and_save_features_pca(
-                                torch.cat([attn_map], dim=0),
-                                torch.cat([transform_attn_maps], dim=0),
-                                ['debug'],
-                                i,
-                                path
-                            )
-                    filename = f"{experiment_id}_PixArtXL_cond{condition_id}.png"
+                    images = pipe(prompt=prompt,height=512,width=512).images[0]
+                    model_tag = model_name.replace("/", "_")
+                    if visualize and model_name=="PixArt-alpha/PixArt-XL-2-512x512":
+                        for i in range(28):
+                            attn_map = PtpUtilsTransformer.get_self_attention_map(controller,256,i,False)
+                            transform_attn_maps = copy.deepcopy(attn_map)
+                            path = os.path.join(self.output_dir, f'self_attn_maps_{model_tag}_cond{condition_id}')
+                            PtpUtilsTransformer.visualize_and_save_features_pca(
+                                    torch.cat([attn_map], dim=0),
+                                    torch.cat([transform_attn_maps], dim=0),
+                                    ['debug'],
+                                    i,
+                                    path
+                                )
+                    filename = f"{experiment_id}_{model_tag}_cond{condition_id}.png"
                     path = os.path.join(self.output_dir, filename)
                     images.save(path)
                 
