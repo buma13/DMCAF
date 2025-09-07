@@ -13,7 +13,7 @@ model_names = {
 
 def calculate_average_color_accuracy_by_model(db_path, print_enabled=False):
     """
-    Groups rows by model_name and calculates the average color_accuracy_clip for each model.
+    Groups rows by model_name and calculates the average color_accuracy for each model.
     Args:
         db_path (str): Path to the SQLite database file.
     """
@@ -23,9 +23,9 @@ def calculate_average_color_accuracy_by_model(db_path, print_enabled=False):
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # Query to group by model_name and calculate average color_accuracy_clip
+        # Query to group by model_name and calculate average color_accuracy
         query = """
-        SELECT model_name, AVG(color_accuracy_clip) AS avg_color_accuracy
+        SELECT model_name, AVG(color_accuracy) AS avg_color_accuracy
         FROM image_evaluations
         GROUP BY model_name
         """
@@ -51,7 +51,7 @@ def calculate_average_color_accuracy_by_model(db_path, print_enabled=False):
 
 def calculate_average_color_accuracy_by_confidence(db_path, print_enabled=False):
     """
-    Calculates the average color_accuracy_clip grouped by 5 color_confidence bins:
+    Calculates the average color_accuracy grouped by 5 color_confidence bins:
     1: 0.0-0.2, 2: 0.2-0.4, 3: 0.4-0.6, 4: 0.6-0.8, 5: 0.8-1.0
     Args:
         db_path (str): Path to the SQLite database file.
@@ -70,10 +70,10 @@ def calculate_average_color_accuracy_by_confidence(db_path, print_enabled=False)
                 WHEN color_confidence >= 0.6 AND color_confidence < 0.8 THEN '[0.6, 0.8)'
                 WHEN color_confidence >= 0.8 AND color_confidence <= 1 THEN '[0.8, 1.0]'
             END AS confidence_bin,
-            AVG(color_accuracy_clip) AS avg_color_accuracy,
+            AVG(color_accuracy) AS avg_color_accuracy,
             COUNT(*) AS count
         FROM image_evaluations
-        WHERE color_confidence IS NOT NULL AND color_accuracy_clip IS NOT NULL
+        WHERE color_confidence IS NOT NULL AND color_accuracy IS NOT NULL
         GROUP BY confidence_bin
         ORDER BY confidence_bin ASC
         """
@@ -98,7 +98,7 @@ def calculate_average_color_accuracy_by_confidence(db_path, print_enabled=False)
 
 def calculate_average_color_accuracy_by_object(db_path, print_enabled=False):
     """
-    Groups rows by model_name and object_name, and calculates the average color_accuracy_clip
+    Groups rows by model_name and object_name, and calculates the average color_accuracy
     and the count of rows for each combination.
     Args:
         db_path (str): Path to the SQLite database file.
@@ -109,11 +109,11 @@ def calculate_average_color_accuracy_by_object(db_path, print_enabled=False):
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # Query to group by model_name and object_name, calculate average color_accuracy_clip, and count rows
+        # Query to group by model_name and object_name, calculate average color_accuracy, and count rows
         query = """
-        SELECT target_object, AVG(color_accuracy_clip) AS avg_color_accuracy, COUNT(*) AS count
+        SELECT target_object, AVG(color_accuracy) AS avg_color_accuracy, COUNT(*) AS count
         FROM image_evaluations
-        WHERE detected_color_clip IS NOT NULL
+        WHERE detected_color IS NOT NULL
         GROUP BY target_object
         ORDER BY avg_color_accuracy DESC
         """
@@ -150,7 +150,7 @@ def calculate_average_color_accuracy_for_low_color_variability_objects(db_path):
 
 def calculate_count_by_detected_and_expected_color(db_path, print_enabled=False):
     """
-    Groups rows by (detected_color_clip, expected_color) and counts the number of rows for each pair.
+    Groups rows by (detected_color, expected_color) and counts the number of rows for each pair.
     Args:
         db_path (str): Path to the SQLite database file.
     """
@@ -160,10 +160,10 @@ def calculate_count_by_detected_and_expected_color(db_path, print_enabled=False)
         cursor = conn.cursor()
 
         query = """
-        SELECT detected_color_clip, expected_color, COUNT(*) AS count
+        SELECT detected_color, expected_color, COUNT(*) AS count
         FROM image_evaluations
-        WHERE detected_color_clip IS NOT NULL AND expected_color IS NOT NULL AND expected_color != detected_color_clip
-        GROUP BY detected_color_clip, expected_color
+        WHERE detected_color IS NOT NULL AND expected_color IS NOT NULL AND expected_color != detected_color
+        GROUP BY detected_color, expected_color
         ORDER BY count DESC
         """
         cursor.execute(query)
@@ -195,7 +195,7 @@ def calculate_count_by_detected_and_expected_color(db_path, print_enabled=False)
 
 def calculate_average_color_accuracy_by_pixel_ratio(db_path, print_enabled=False):
     """
-    Calculates the average color_accuracy_clip grouped by 5 pixel_ratio bins:
+    Calculates the average color_accuracy grouped by 5 pixel_ratio bins:
     1: 0.0-0.2, 2: 0.2-0.4, 3: 0.4-0.6, 4: 0.6-0.8, 5: 0.8-1.0
     Args:
         db_path (str): Path to the SQLite database file.
@@ -220,10 +220,10 @@ def calculate_average_color_accuracy_by_pixel_ratio(db_path, print_enabled=False
                 WHEN pixel_ratio >= 0.45 AND pixel_ratio < 0.50 THEN '[45, 50)'
                 WHEN pixel_ratio >= 0.50 AND pixel_ratio <= 1 THEN '[50, 100)'
             END AS pixel_ratio_bin, model_name,
-            AVG(color_accuracy_clip) AS avg_color_accuracy,
+            AVG(color_accuracy) AS avg_color_accuracy,
             COUNT(*) AS count
         FROM image_evaluations
-        WHERE pixel_ratio IS NOT NULL AND color_accuracy_clip IS NOT NULL
+        WHERE pixel_ratio IS NOT NULL AND color_accuracy IS NOT NULL
         GROUP BY pixel_ratio_bin, model_name
         ORDER BY model_name ASC, pixel_ratio_bin ASC
         """
