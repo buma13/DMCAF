@@ -83,7 +83,7 @@ For example the prompt `a purple motorcycle in front of the table` results in th
         - assets/
         - config/
         - dmcaf/
-        - medical_image/
+        - medical_image/ ##Training scripts for Fundus images
     - models/
     - data/ (OUTPUT_DIRECTORY)
         - experiment_xxx/  ## Generated images
