@@ -1,0 +1,6 @@
+condition_set_id: condition_set_color
+
+conditioning_db: conditioning.db
+
+condition_generator:
+  color_prompts: 1000

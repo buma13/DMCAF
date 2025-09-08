@@ -36,6 +36,7 @@ dm_runner:
 evaluator:
   metrics:
     - YOLO Count
+    - Segmentation Dice
 ```
 
 ### Advanced Configuration
@@ -87,6 +88,7 @@ evaluator:
     - YOLO Count
     - Color Classification
     - YOLO Composition
+    - Segmentation Dice
 ```
 
 ## Configuration Options

@@ -3,7 +3,7 @@ import sqlite3
 import cv2
 import numpy as np
 import json
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Any
 from datetime import datetime
 
 from PIL import Image
@@ -11,10 +11,44 @@ from torchvision import transforms
 from torchvision.models import inception_v3, Inception_V3_Weights
 import torch
 from scipy.linalg import sqrtm
+from ultralytics import YOLO
 from .object_count import ObjectCounter
 from .object_detection import ObjectDetector
 from .object_color_classification import ObjectColorClassifier
 from .object_segmentation import ObjectSegmenter
+
+# Class name and color mappings used for segmentation evaluation
+CLASS_NAME_MAPPING = {
+    0: "Black Background",
+    1: "Abdominal Wall",
+    2: "Liver",
+    3: "Gastrointestinal Tract",
+    4: "Fat",
+    5: "Grasper",
+    6: "Connective Tissue",
+    7: "Blood",
+    8: "Cystic Duct",
+    9: "L-hook Electrocautery",
+    10: "Gallbladder",
+    11: "Hepatic Vein",
+    12: "Liver Ligament",
+}
+
+CLASS_COLOR_MAPPING = {
+    0: (127, 127, 127),
+    1: (210, 140, 140),
+    2: (255, 114, 114),
+    3: (231, 70, 156),
+    4: (186, 183, 75),
+    5: (170, 255, 0),
+    6: (255, 85, 0),
+    7: (255, 0, 0),
+    8: (255, 255, 0),
+    9: (169, 255, 184),
+    10: (255, 160, 165),
+    11: (0, 50, 128),
+    12: (111, 74, 0),
+}
 
 from pathlib import Path
 from torch import nn
@@ -151,7 +185,34 @@ class Evaluator:
                 timestamp TEXT
             )
         """)
-        
+
+        # Table for per-image dice scores
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS segmentation_dice (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_id TEXT,
+                condition_id INTEGER,
+                image_path TEXT,
+                model_name TEXT,
+                guidance_scale REAL,
+                num_inference_steps INTEGER,
+                class_name TEXT,
+                dice_score REAL,
+                timestamp TEXT
+            )
+        """)
+
+        # Table for average dice scores per class
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS segmentation_dice_summary (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                experiment_id TEXT,
+                class_name TEXT,
+                mean_dice REAL,
+                timestamp TEXT
+            )
+        """)
+
         self.evaluation_conn.commit()
 
     def evaluate_outputs(self, experiment_id: str, metrics: List[str]):
@@ -163,6 +224,8 @@ class Evaluator:
             self.evaluate_object_composition(experiment_id)
         if "Color Classification" in metrics:
             self.evaluate_color_classification(experiment_id)
+        if "Segmentation Dice" in metrics:
+            self.evaluate_segmentation_dice(experiment_id)
         
         # Compute experiment summary once at the end
         self._compute_experiment_summary(experiment_id)
@@ -523,6 +586,131 @@ class Evaluator:
                 object2=obj2_singular
             )
 
+    def evaluate_segmentation_dice(self, experiment_id: str):
+        """Computes per-class Dice score between conditioning masks and generated images."""
+        print(f"Evaluating Segmentation Dice for experiment: {experiment_id}")
+        # Segment generated images using the finetuned YOLO model
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        yolo_model = YOLO(
+            "/mnt/projects/mlmi/dmcaf_laparoscopic/cholecseg8k-yolov8/runs/segment/train/weights/best.pt"
+        )
+        output_cursor = self.output_conn.cursor()
+        cond_cursor = self.conditioning_conn.cursor()
+
+        output_cursor.execute(
+            """
+            SELECT condition_id, image_path, model_name, guidance_scale, num_inference_steps
+            FROM dm_outputs
+            WHERE experiment_id = ?
+            AND model_name LIKE ?
+            """,
+            (experiment_id, "laparoscopic"),
+        )
+
+        dice_sums: Dict[str, float] = {name: 0.0 for name in CLASS_NAME_MAPPING.values()}
+        dice_counts: Dict[str, int] = {name: 0 for name in CLASS_NAME_MAPPING.values()}
+
+        for cond_id, image_path, model, gs, steps in output_cursor.fetchall():
+            cond_cursor.execute(
+                "SELECT segmentation_path FROM conditions WHERE id = ?", (cond_id,)
+            )
+            seg_row = cond_cursor.fetchone()
+            if not seg_row or not seg_row[0] or not os.path.exists(seg_row[0]):
+                continue
+
+            gt_masks = self._load_condition_masks(seg_row[0])
+            if not gt_masks:
+                continue
+
+            # Only evaluate classes that are present in the ground truth segmentation
+            gt_masks = {name: mask for name, mask in gt_masks.items() if mask.any()}
+            if not gt_masks:
+                continue
+
+            h, w = next(iter(gt_masks.values())).shape
+
+            # Run YOLO segmentation on the generated image
+            results = yolo_model(
+                image_path,
+                save=False,
+                device=device,
+                show_labels=False,
+                verbose=False,
+            )       
+            result = results[0]
+            detections = []
+            if result.masks:
+                masks = result.masks.data
+                classes = result.boxes.cls.to(torch.int64).cpu().tolist()
+                h, w = masks.shape[-2:]
+                seg_mask = np.zeros((h, w, 3), dtype=np.uint8)
+                seg_mask[:] = CLASS_COLOR_MAPPING[0]
+                for mask, cls in zip(masks, classes):
+                    class_name = CLASS_NAME_MAPPING.get(cls, CLASS_NAME_MAPPING[0])
+                    detections.append({
+                        "class_name": class_name,
+                        "mask": mask.cpu().numpy(),
+                    })
+                    color = CLASS_COLOR_MAPPING.get(cls, CLASS_COLOR_MAPPING[0])
+                    seg_mask[mask.bool().cpu().numpy()] = color
+                    
+                seg_mask_bgr = cv2.cvtColor(seg_mask, cv2.COLOR_RGB2BGR)
+                base, ext = os.path.splitext(image_path)
+                segmented_path = f"{base}_segmented{ext}"
+                cv2.imwrite(segmented_path, seg_mask_bgr)
+
+            pred_masks = self._combine_masks_by_class(detections, h, w)
+
+            cursor = self.evaluation_conn.cursor()
+            for class_name, gt in gt_masks.items():
+                pred = pred_masks.get(class_name, np.zeros((h, w), dtype=bool))
+                dice = self._dice_score(pred, gt)
+
+                cursor.execute(
+                    """
+                    INSERT INTO segmentation_dice (
+                        experiment_id, condition_id, image_path, model_name,
+                        guidance_scale, num_inference_steps, class_name, dice_score, timestamp
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        experiment_id,
+                        cond_id,
+                        image_path,
+                        model,
+                        gs,
+                        steps,
+                        class_name,
+                        dice,
+                        datetime.now().isoformat(),
+                    ),
+                )
+
+                dice_sums[class_name] += dice
+                dice_counts[class_name] += 1
+
+        # Store per-class averages
+        cursor = self.evaluation_conn.cursor()
+        for class_name, total in dice_sums.items():
+            count = dice_counts[class_name]
+            if count == 0:
+                continue
+            cursor.execute(
+                """
+                INSERT INTO segmentation_dice_summary (
+                    experiment_id, class_name, mean_dice, timestamp
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    experiment_id,
+                    class_name,
+                    total / count,
+                    datetime.now().isoformat(),
+                ),
+            )
+
+        self.evaluation_conn.commit()
+
     def _check_spatial_relation(self, box1: List[float], box2: List[float], relation: str) -> bool:
         """Checks if box1 is in the correct spatial relation to box2."""
         # Get center points
@@ -558,6 +746,49 @@ class Evaluator:
                          (is_vertically_aligned and is_vertically_close)
 
         return is_correct
+
+    def _load_condition_masks(self, seg_path: str) -> Dict[str, np.ndarray]:
+        """Load segmentation masks for each class from conditioning image."""
+        image = cv2.imread(seg_path)
+        if image is None:
+            return {}
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        masks = {}
+        for class_id, color in CLASS_COLOR_MAPPING.items():
+            class_name = CLASS_NAME_MAPPING[class_id]
+            masks[class_name] = np.all(image == color, axis=-1)
+        return masks
+
+    def _combine_masks_by_class(self, detections: List[Dict[str, Any]], h: int, w: int) -> Dict[str, np.ndarray]:
+        """Combine multiple instance masks into a single mask per class."""
+        masks: Dict[str, np.ndarray] = {}
+        for det in detections:
+            class_name = det['class_name']
+            mask = det['mask']
+            if mask.shape != (h, w):
+                mask = cv2.resize(mask.astype(np.uint8), (w, h)) > 0.5
+            else:
+                mask = mask > 0.5
+            if class_name in masks:
+                masks[class_name] = np.logical_or(masks[class_name], mask)
+            else:
+                masks[class_name] = mask
+
+        # Background mask is everything not covered by other masks
+        bg_mask = np.ones((h, w), dtype=bool)
+        for m in masks.values():
+            bg_mask &= ~m
+        masks.setdefault(CLASS_NAME_MAPPING[0], bg_mask)
+        return masks
+
+    def _dice_score(self, pred: np.ndarray, gt: np.ndarray) -> float:
+        """Compute Dice coefficient between two binary masks."""
+        pred_sum = pred.sum()
+        gt_sum = gt.sum()
+        if pred_sum + gt_sum == 0:
+            return 1.0
+        intersection = np.logical_and(pred, gt).sum()
+        return 2.0 * intersection / (pred_sum + gt_sum)
 
     def _compute_activations(self, image_paths: List[str]) -> np.ndarray:
         batch = []

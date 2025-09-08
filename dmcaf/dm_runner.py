@@ -8,7 +8,7 @@ from PIL import Image
 import numpy as np
 import torch
 import copy
-from diffusers import StableDiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler, PNDMScheduler, AutoencoderKL, PixArtAlphaPipeline,StableDiffusion3Pipeline
+from diffusers import StableDiffusionControlNetPipeline, StableDiffusionPipeline, DPMSolverMultistepScheduler, ControlNetModel, DDIMScheduler, PNDMScheduler, AutoencoderKL, PixArtAlphaPipeline,StableDiffusion3Pipeline
 import dmcaf.prompt_to_prompt.ptp_utils as PtpUtilsUnet
 from . prompt_to_prompt.transformer_2d import Transformer2DModel
 import dmcaf.prompt_to_prompt.ptp_utils_dit as PtpUtilsTransformer
@@ -43,6 +43,7 @@ class DMRunner:
                 condition_id INTEGER,
                 prompt TEXT,
                 image_path TEXT,
+                visualization_path TEXT,
                 timestamp TEXT
             )
         """)
@@ -64,7 +65,7 @@ class DMRunner:
                 limit = cs.get("limit_number_of_conditions")
                 
                 # Build query based on configuration
-                query_parts = ["SELECT id, prompt, type FROM conditions WHERE experiment_id = ?"]
+                query_parts = ["SELECT id, prompt, type, segmentation_path FROM conditions WHERE experiment_id = ?"]
                 params: List[Any] = [cs_id]
                 
                 # Handle type selection
@@ -99,14 +100,14 @@ class DMRunner:
                     print(f"DEBUG: Types found: {types_found}")
                 else:
                     # DEBUG: Let's see what's actually available
-                    cursor.execute("SELECT DISTINCT type FROM conditions WHERE experiment_id = ?", (cs_id,))
+                    cursor.execute("SELECT DISTINCT type, segmentation_path FROM conditions WHERE experiment_id = ?", (cs_id,))
                     available_types = [row[0] for row in cursor.fetchall()]
                     print(f"DEBUG: Available types in {cs_id}: {available_types}")
                 
                 conditions.extend(batch_conditions)
         else:
             cursor.execute(
-                "SELECT id, prompt, type FROM conditions WHERE experiment_id = ?",
+                "SELECT id, prompt, type, segmentation_path FROM conditions WHERE experiment_id = ?",
                 (experiment_id,),
             )
             conditions = cursor.fetchall()
@@ -125,7 +126,52 @@ class DMRunner:
                 pipeline_kwargs['vae'] = AutoencoderKL.from_pretrained(vae_name)
 
             # run standard dm_runner for unet-based models
-            if not dit and not ("stable-diffusion-3" in model_name): 
+            visualization_path = "NULL"
+            if "laparoscopic" in model_name:
+                # TODO: Move paths to config
+                CONTROLNET_PATH = "/mnt/projects/mlmi/dmcaf_laparoscopic/models/ControlNet/checkpoint-70000/controlnet"
+                STABLEDIFFUSION_PATH = "/mnt/projects/mlmi/dmcaf_laparoscopic/models/StableDiffusion"
+                controlnet = ControlNetModel.from_pretrained(CONTROLNET_PATH, torch_dtype=torch.float16, use_safetensors=True)
+                pipe = StableDiffusionControlNetPipeline.from_pretrained(
+                    STABLEDIFFUSION_PATH,
+                    controlnet=controlnet,
+                    torch_dtype=torch.float16,
+                    use_safetensors=True,
+                    safety_checker=None
+                )
+                pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
+                
+                for condition_id, prompt, condition_type, segmentation_path in conditions:
+                    print(f"[{model_name}] Generating: {prompt} (type: {condition_type}, guidance={guidance_scale}, steps={num_inference_steps})")
+                    if visualize:
+                        print("Warning: visualizing corss-attention not yet supported for ControlNet Model")
+                    if not segmentation_path:
+                        print(
+                            f"Warning: condition {condition_id} missing segmentation_path, skipping"
+                        )
+                        continue
+                    ctrl_img = Image.open(segmentation_path).convert("RGB")
+                    image = pipe(
+                        prompt,
+                        image=ctrl_img,
+                        height=128,
+                        width=128,
+                        num_inference_steps=num_inference_steps,
+                        guidance_scale=guidance_scale,
+                        num_images_per_prompt=1,
+                    ).images[0]
+                    image_path = self._save_image(
+                        experiment_id=experiment_id,
+                        model_name=model_name,
+                        condition_id=condition_id,
+                        image=image,
+                        visualize=False,
+                        guidance_scale=guidance_scale,
+                        num_inference_steps=num_inference_steps)
+                    
+                    self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path, visualization_path)
+
+            elif not dit and not ("stable-diffusion-3" in model_name): 
                 print(f"Loading model: {model_name}")
 
                 pipe = StableDiffusionPipeline.from_pretrained(model_name, **pipeline_kwargs)
@@ -146,7 +192,7 @@ class DMRunner:
 
                 pipe.scheduler.set_timesteps(num_inference_steps)
                 # inference with prompt-to-prompt
-                for condition_id, prompt, _ in conditions:
+                for condition_id, prompt, _, _ in conditions:
                     controller = PtpUtilsUnet.AttentionStore()
                     images, _ = PtpUtilsUnet.run_and_display(
                         ldm_stable=pipe,
@@ -170,7 +216,7 @@ class DMRunner:
                         visualize=False,
                         guidance_scale=guidance_scale,
                         num_inference_steps=num_inference_steps)
-                    self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path,visualize=False)
+                    
                     # If visualization is enabled, show cross-attention maps
                     if visualize:
                         print(f"[{model_name}] Visualizing cross-attention for: {prompt}")
@@ -184,7 +230,7 @@ class DMRunner:
                         )
                         # Convert cross-attention images to a format suitable for saving
                         attention_format_images=PtpUtilsUnet.view_images((cross_attention_images), num_rows=1, offset_ratio=0.02)
-                        image_path = self._save_image(
+                        visualization_path = self._save_image(
                             experiment_id=experiment_id,
                             model_name=model_name,
                             condition_id=condition_id,
@@ -192,7 +238,8 @@ class DMRunner:
                             visualize=True,
                             guidance_scale=guidance_scale,
                             num_inference_steps=num_inference_steps)
-                        self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path, visualize=True)
+
+                    self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path, visualization_path)
 
             # run dit model with transformer backbone, we currently support sd-3 med, sd-3.5 med and PixArt-XL.
             else:
@@ -200,6 +247,7 @@ class DMRunner:
                     pipe = StableDiffusion3Pipeline.from_pretrained(model_name, torch_dtype=torch.float16)
                     
                 else: # assume PixArt-XL because we only support this additionally to 3 and 3.5. Also it takes more steps to load the model.
+                    print(f"Selected model [{model_name}] not supported, defaulting to PixArt-XL")
                     model_name="PixArt-alpha/PixArt-XL-2-512x512"
                     pixart_transformer = Transformer2DModel.from_pretrained(model_name, subfolder="transformer",torch_dtype=torch.float16,)
                     pipe = PixArtAlphaPipeline.from_pretrained(
@@ -209,9 +257,8 @@ class DMRunner:
                 print(f"Loading model: {model_name}")
                 pipe = pipe.to("cuda" if torch.cuda.is_available() else "cpu")
                 #pipe.enable_attention_slicing()
-             
 
-                for condition_id, prompt, _ in conditions:
+                for condition_id, prompt, _, _ in conditions:
                     print(f"[{model_name}] Generating: {prompt} (guidance={guidance_scale}, steps={num_inference_steps})")
                     #since visualization needs the controller, and only PixArt-XL supports it for now, we only create the controller for this model.
                     if model_name=="PixArt-alpha/PixArt-XL-2-512x512":
@@ -224,20 +271,19 @@ class DMRunner:
                         for i in range(28):
                             attn_map = PtpUtilsTransformer.get_self_attention_map(controller,256,i,False)
                             transform_attn_maps = copy.deepcopy(attn_map)
-                            path = os.path.join(self.output_dir, f'self_attn_maps_{model_tag}_cond{condition_id}')
+                            visualization_path = os.path.join(self.output_dir, f'self_attn_maps_{model_tag}_cond{condition_id}')
                             PtpUtilsTransformer.visualize_and_save_features_pca(
                                     torch.cat([attn_map], dim=0),
                                     torch.cat([transform_attn_maps], dim=0),
                                     ['debug'],
                                     i,
-                                    path
+                                    visualization_path
                                 )
                     filename = f"{experiment_id}_{model_tag}_cond{condition_id}.png"
-                    path = os.path.join(self.output_dir, filename)
-                    images.save(path)
+                    image_path = os.path.join(self.output_dir, filename)
+                    images.save(image_path)
                 
-
-
+                    self._log_output(experiment_id, model_name, guidance_scale, num_inference_steps, condition_id, prompt, image_path, visualization_path)
 
     def _save_image(self, experiment_id: str, model_name: str, condition_id: int, image: Image.Image,visualize: bool,
                     guidance_scale: float, num_inference_steps: int) -> str:
@@ -253,16 +299,16 @@ class DMRunner:
         return path
 
     def _log_output(self, experiment_id: str, model_name: str, guidance_scale: float,
-                    num_inference_steps: int, condition_id: int, prompt: str, image_path: str, visualize: bool):
+                    num_inference_steps: int, condition_id: int, prompt: str, image_path: str, visualization_path: str = "NULL"):
         cursor = self.output_conn.cursor()
         cursor.execute("""
             INSERT INTO dm_outputs (
                 experiment_id, model_name, guidance_scale, num_inference_steps,
-                condition_id, prompt, image_path, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                condition_id, prompt, image_path, visualization_path, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             experiment_id, model_name, guidance_scale, num_inference_steps,
-            condition_id, prompt, image_path, datetime.now().isoformat()
+            condition_id, prompt, image_path, visualization_path, datetime.now().isoformat()
         ))
         self.output_conn.commit()
 
