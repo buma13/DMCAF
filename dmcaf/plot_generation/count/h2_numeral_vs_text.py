@@ -163,7 +163,7 @@ class Hypothesis2Analyzer(BaseHypothesisAnalyzer):
             ax1.set_xticks(x_pos)
             ax1.set_xticklabels([model.replace('SD-', '') for model in comp_df['model']], rotation=45)
             ax1.set_ylabel('Accuracy Difference (Base - Numeral)')
-            ax1.set_title('Base vs Numeral: Wilcoxon (paired per-count) or t-test\n(*p<0.05, **p<0.01, ***p<0.001)')
+            ax1.set_title('Base vs Numeral: Wilcoxon (paired per-count)\n(*p<0.05, **p<0.01, ***p<0.001)')
             ax1.grid(True, alpha=0.3)
             ax1.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=1)
             
@@ -334,6 +334,76 @@ class Hypothesis2Analyzer(BaseHypothesisAnalyzer):
             base_better_count = 0
             significant_base_better = 0
         
+        # Build detailed per-plot outputs
+        # Plot 1: stats by model (already in comp_df)
+        plot1_data = comp_df.to_dict('records') if len(comp_df) > 0 else []
+
+        # Plot 2: effect sizes by model (cohens_d)
+        plot2_effect_sizes = [
+            { 'model': row['model'], 'cohens_d': float(row['cohens_d']) }
+            for _, row in comp_df.iterrows()
+        ] if len(comp_df) > 0 else []
+
+        # Plot 3: base vs numeral advantage by expected_count
+        # Recompute to include explicit base/numeral means alongside percentage
+        count_variant_stats = (
+            variant_data.groupby(['expected_count', 'variant'])
+            .agg(mean_acc=('count_accuracy', 'mean'), sample_size=('count_accuracy', 'size'))
+            .reset_index()
+        )
+        pivot_means = count_variant_stats.pivot(index='expected_count', columns='variant', values='mean_acc')
+        pivot_counts = count_variant_stats.pivot(index='expected_count', columns='variant', values='sample_size')
+        plot3_series = []
+        if {'base', 'numeral'}.issubset(set(pivot_means.columns)):
+            for expected_count in sorted(pivot_means.index):
+                base_mean = float(pivot_means.loc[expected_count, 'base']) if pd.notna(pivot_means.loc[expected_count, 'base']) else None
+                numeral_mean = float(pivot_means.loc[expected_count, 'numeral']) if pd.notna(pivot_means.loc[expected_count, 'numeral']) else None
+                base_adv_pct = float((base_mean - numeral_mean) * 100) if (base_mean is not None and numeral_mean is not None) else None
+                base_n = int(pivot_counts.loc[expected_count, 'base']) if 'base' in pivot_counts.columns and pd.notna(pivot_counts.loc[expected_count, 'base']) else None
+                numeral_n = int(pivot_counts.loc[expected_count, 'numeral']) if 'numeral' in pivot_counts.columns and pd.notna(pivot_counts.loc[expected_count, 'numeral']) else None
+                plot3_series.append({
+                    'expected_count': int(expected_count),
+                    'base_mean': base_mean,
+                    'numeral_mean': numeral_mean,
+                    'base_advantage_pct': base_adv_pct,
+                    'base_n': base_n,
+                    'numeral_n': numeral_n,
+                })
+
+        # Plot 4: direct comparison per count with error bars and per-count t-test p-value
+        plot4_series = []
+        if len(comp_df) > 0:
+            # reuse count_stats if computed above; else compute now
+            count_stats = variant_data.groupby(['expected_count', 'variant']).agg({'count_accuracy': ['mean', 'std', 'count']}).reset_index()
+            count_stats.columns = ['expected_count', 'variant', 'mean_acc', 'std_acc', 'sample_size']
+            # Compute SE
+            count_stats['se'] = count_stats['std_acc'] / np.sqrt(count_stats['sample_size'])
+            for expected_count in sorted(count_stats['expected_count'].unique()):
+                row_base = count_stats[(count_stats['expected_count'] == expected_count) & (count_stats['variant'] == 'base')]
+                row_num = count_stats[(count_stats['expected_count'] == expected_count) & (count_stats['variant'] == 'numeral')]
+                base_acc = variant_data[(variant_data['variant'] == 'base') & (variant_data['expected_count'] == expected_count)]['count_accuracy']
+                num_acc = variant_data[(variant_data['variant'] == 'numeral') & (variant_data['expected_count'] == expected_count)]['count_accuracy']
+                p_val = None
+                if len(base_acc) > 0 and len(num_acc) > 0:
+                    _, p_val = ttest_ind(base_acc, num_acc, equal_var=False)
+                plot4_series.append({
+                    'expected_count': int(expected_count),
+                    'base': {
+                        'mean': float(row_base['mean_acc'].iloc[0]) if not row_base.empty else None,
+                        'std': float(row_base['std_acc'].iloc[0]) if not row_base.empty else None,
+                        'n': int(row_base['sample_size'].iloc[0]) if not row_base.empty else None,
+                        'se': float(row_base['se'].iloc[0]) if not row_base.empty else None,
+                    },
+                    'numeral': {
+                        'mean': float(row_num['mean_acc'].iloc[0]) if not row_num.empty else None,
+                        'std': float(row_num['std_acc'].iloc[0]) if not row_num.empty else None,
+                        'n': int(row_num['sample_size'].iloc[0]) if not row_num.empty else None,
+                        'se': float(row_num['se'].iloc[0]) if not row_num.empty else None,
+                    },
+                    'p_value': float(p_val) if p_val is not None else None,
+                    'significant': (p_val is not None and p_val < 0.05)
+                })
+
         result = {
             'verified': hypothesis_verified,
             'comparisons': comp_df.to_dict('records') if len(comp_df) > 0 else [],
@@ -341,6 +411,12 @@ class Hypothesis2Analyzer(BaseHypothesisAnalyzer):
             'significant_base_better': significant_base_better,
             'total_models': len(comp_df) if len(comp_df) > 0 else 0,
             'verification_method': 'Wilcoxon per-count paired (fallback t-test)',
+            'plots': {
+                'plot_1_stats_by_model': plot1_data,
+                'plot_2_effect_sizes': plot2_effect_sizes,
+                'plot_3_base_advantage_by_count': plot3_series,
+                'plot_4_direct_comparison_by_count': plot4_series,
+            },
             'conclusion': f"{'✅ VERIFIED' if hypothesis_verified else '❌ NOT VERIFIED'}: "
                          f"{significant_base_better}/{len(comp_df) if len(comp_df) > 0 else 0} models show significant base>numeral"
         }

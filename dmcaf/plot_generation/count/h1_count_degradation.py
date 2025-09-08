@@ -53,14 +53,14 @@ class Hypothesis1Analyzer(BaseHypothesisAnalyzer):
         # Plot 2: Critical failure analysis (vectorized, pandas 2.2-safe)
         tmp = self.df.copy()
         tmp['is_critical'] = tmp['count_accuracy'] < CRITICAL_ACCURACY_THRESHOLD
-        critical_failures = (
-            tmp.groupby(['model_short', 'expected_count'])['is_critical']
-               .mean()
-               .reset_index(name='failure_rate')
+        critical_failures_df = (
+            tmp.groupby(['model_short', 'expected_count'])
+               .agg(failure_rate=('is_critical', 'mean'), sample_size=('is_critical', 'size'))
+               .reset_index()
         )
         
         for model in sorted(self.df['model_short'].unique()):
-            model_data = critical_failures[critical_failures['model_short'] == model]
+            model_data = critical_failures_df[critical_failures_df['model_short'] == model]
             ax2.plot(model_data['expected_count'], model_data['failure_rate'], 
                     marker='s', linewidth=2, label=model, color=MODEL_COLORS.get(model, 'black'))
         
@@ -111,8 +111,8 @@ class Hypothesis1Analyzer(BaseHypothesisAnalyzer):
             
             # Calculate failure rate at each count level
             total_evaluations = len(count_data)
-            critical_failures = (count_data['count_accuracy'] < CRITICAL_ACCURACY_THRESHOLD).sum()
-            failure_rate = critical_failures / total_evaluations if total_evaluations > 0 else 0
+            critical_failures_count = (count_data['count_accuracy'] < CRITICAL_ACCURACY_THRESHOLD).sum()
+            failure_rate = critical_failures_count / total_evaluations if total_evaluations > 0 else 0
             
             # Calculate average accuracy across all models
             avg_accuracy = count_data['count_accuracy'].mean()
@@ -124,7 +124,6 @@ class Hypothesis1Analyzer(BaseHypothesisAnalyzer):
                 'sample_size': total_evaluations,
                 'critical_point': failure_rate >= 0.5
             })
-
         threshold_df = pd.DataFrame(threshold_analysis)
 
         # Create dual-axis plot showing both failure rate and accuracy
@@ -182,11 +181,56 @@ class Hypothesis1Analyzer(BaseHypothesisAnalyzer):
         high_count_critical_failure = any(threshold_df[threshold_df['expected_count'] >= 7]['critical_point']) if len(threshold_df) > 0 else False
         critical_failure_starts_at = min(critical_counts) if critical_counts else None
         
+        # Build detailed per-plot numeric outputs for serialization into results.json
+        # Plot 1 data: accuracy by expected count (per model)
+        plot1_series = {}
+        for model in sorted(grouped['model_short'].unique()):
+            g = grouped[grouped['model_short'] == model].sort_values('expected_count')
+            plot1_series[model] = [
+                {
+                    'expected_count': int(row['expected_count']),
+                    'mean_accuracy': float(row['count_accuracy_mean']),
+                    'std_accuracy': float(row['count_accuracy_std']) if pd.notna(row['count_accuracy_std']) else None,
+                    'n': int(row['count_accuracy_count']),
+                }
+                for _, row in g.iterrows()
+            ]
+
+        # Plot 2 data: critical failure rate by expected count (per model)
+        plot2_series = {}
+        for model in sorted(critical_failures_df['model_short'].unique()):
+            g = critical_failures_df[critical_failures_df['model_short'] == model].sort_values('expected_count')
+            plot2_series[model] = [
+                {
+                    'expected_count': int(row['expected_count']),
+                    'failure_rate': float(row['failure_rate']),
+                    'sample_size': int(row['sample_size']),
+                }
+                for _, row in g.iterrows()
+            ]
+
+        # Plot 3 data is already captured via correlations (per model Spearman r)
+        plot3_data = corr_df.to_dict('records') if len(corr_df) > 0 else []
+
+        # Plot 4 data: threshold_df already contains the values displayed
+        plot4_data = threshold_df.to_dict('records') if len(threshold_df) > 0 else []
+
         result = {
             'verified': all_models_degrade and high_count_critical_failure,
-            'correlations': corr_df.to_dict('records') if len(corr_df) > 0 else [],
-            'threshold_analysis': threshold_df.to_dict('records') if len(threshold_df) > 0 else [],
+            'correlations': plot3_data,
+            'threshold_analysis': plot4_data,
             'critical_failure_starts_at': critical_failure_starts_at,
+            'plots': {
+                'plot_1_accuracy_by_count': {
+                    'critical_accuracy_threshold': float(CRITICAL_ACCURACY_THRESHOLD),
+                    'series': plot1_series,
+                },
+                'plot_2_critical_failure_rates': {
+                    'series': plot2_series,
+                },
+                'plot_3_spearman_correlations': plot3_data,
+                'plot_4_threshold_analysis': plot4_data,
+            },
             'conclusion': f"{'✅ VERIFIED' if all_models_degrade and high_count_critical_failure else '❌ PARTIALLY VERIFIED'}: "
                          f"Monotonic degradation across models (Spearman), critical failure threshold: {critical_failure_starts_at}"
         }

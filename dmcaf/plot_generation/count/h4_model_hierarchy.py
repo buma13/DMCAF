@@ -163,6 +163,47 @@ class Hypothesis4Analyzer(BaseHypothesisAnalyzer):
             if not collapse_points_df.empty:
                 hierarchy_collapse_point = collapse_points_df['expected_count'].min()
         
+        # Build per-plot numeric outputs
+        # Plot 1: overall ranking stats already in model_overall
+        plot1_data = model_overall.to_dict('records')
+
+        # Plot 2: ranking stability per model time series
+        plot2_series = {}
+        for model in ranking_df['model_short'].unique():
+            md = ranking_df[ranking_df['model_short'] == model].sort_values('expected_count')
+            plot2_series[model] = [
+                {
+                    'expected_count': int(row['expected_count']),
+                    'rank': int(row['rank'])
+                }
+                for _, row in md.iterrows()
+            ]
+
+        # Plot 3: performance across count bins
+        plot3_bins = {
+            model: [
+                {
+                    'bin_label': bin_labels[idx],
+                    'mean_accuracy': float(acc) if pd.notna(acc) else None
+                }
+                for idx, acc in enumerate(vals)
+            ]
+            for model, vals in model_by_bins.items()
+        }
+
+        # Plot 4: high count variance and stats
+        plot4_high = high_count_variance.copy()
+        plot4_high = plot4_high.merge(model_high_count[['model_short','count_accuracy_count']], on='model_short', how='left')
+        plot4_data = [
+            {
+                'model_short': row['model_short'],
+                'mean': float(row['mean']),
+                'std': float(row['std']),
+                'n': int(row['count_accuracy_count']) if not pd.isna(row['count_accuracy_count']) else None
+            }
+            for _, row in plot4_high.iterrows()
+        ]
+
         result = {
             'verified': hierarchy_exists and all_low_at_high,
             'overall_ranking': model_overall.to_dict('records'),
@@ -172,6 +213,15 @@ class Hypothesis4Analyzer(BaseHypothesisAnalyzer):
             'significant_pairs': len(pairs_df[pairs_df['significant']]),
             'total_pairs': len(pairs_df),
             'all_critical_at_high': all_low_at_high,
+            'plots': {
+                'plot_1_overall_ranking': plot1_data,
+                'plot_2_ranking_stability': {
+                    'series': plot2_series,
+                    'collapse_threshold_variance': 0.5,
+                },
+                'plot_3_bins_performance': plot3_bins,
+                'plot_4_high_count_variance': plot4_data,
+            },
             'conclusion': f"{'✅ VERIFIED' if hierarchy_exists and all_low_at_high else '❌ PARTIALLY VERIFIED'}: "
                          f"Hierarchy exists: {hierarchy_exists}, Collapses at count: {hierarchy_collapse_point}, All critical at high counts: {all_low_at_high}"
         }
