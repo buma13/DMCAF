@@ -188,8 +188,28 @@ conditioning:
         custom_where: "number <= 3"
 ```
 
-## Configuration Validation
+### 4. Fundus Analysis Only
+Run with config/experiments/experiment_fundus.yaml --custom_model
+```yaml
+experiment_id: experiment_fundus
+conditioning:
+  condition_sets:
+    - condition_set_id: fundus
+      limit_number_of_conditions: 512
+      types:
+        - segmentation_mask
 
+dm_runner:
+  models:
+    - model_name: unet
+      num_inference_steps: 1000
+      seed: 42
+
+evaluator:
+  metrics:
+    - DICE
+
+```
 Use the validation tool to check your configuration:
 
 ```bash
