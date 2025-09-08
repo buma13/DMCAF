@@ -602,8 +602,9 @@ class Evaluator:
             SELECT condition_id, image_path, model_name, guidance_scale, num_inference_steps
             FROM dm_outputs
             WHERE experiment_id = ?
+            AND model_name LIKE ?
             """,
-            (experiment_id,),
+            (experiment_id, "laparoscopic"),
         )
 
         dice_sums: Dict[str, float] = {name: 0.0 for name in CLASS_NAME_MAPPING.values()}
@@ -635,18 +636,7 @@ class Evaluator:
                 device=device,
                 show_labels=False,
                 verbose=False,
-            )
-            # result = results[0]
-            # detections = []
-            # if result.masks:
-            #     classes = result.boxes.cls.to(torch.int64).cpu().tolist()
-            #     for mask, cls in zip(result.masks.data, classes):
-            #         class_name = CLASS_NAME_MAPPING.get(cls, CLASS_NAME_MAPPING[0])
-            #         detections.append({
-            #             "class_name": class_name,
-            #             "mask": mask.cpu().numpy(),
-            #         })
-                    
+            )       
             result = results[0]
             detections = []
             if result.masks:
