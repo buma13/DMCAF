@@ -62,7 +62,7 @@ python run_analysis.py --color --experiment-id <Experiment ID>
 Fot the count adherence experiments, the **count_prompts** option of the **condition_generator** generated promt of the following structure: `"a photo of <N> <object>"` 
 For example the prompt `a photo of 7 bottles` results in the generated image below. The **YOLO Count** evaluator counts the number of these objects and compares the expected and detected nuber to asses how well the generation adherec to the conditioning.
 
-![method](assets/example_count.png)
+![ExampleCount](assets/example_count.png)
 
 ### Color Adherance
 For the color adherence experiments, the **color_prompts** option of the **condition_generator** produced prompts of the following structure: `a <color> <object> in front of the <background>`
@@ -74,9 +74,13 @@ For example the prompt `a purple motorcycle in front of the table` results in th
 3. **CLIP** evaluates the isolated object image against a set of text prompts with different colors.  
 4. If the highest CLIP score corresponds to the expected color, the generation is marked as a success; otherwise, it is marked as a failure.  
 
-![method](assets/example_color.png)  
+![ExampleColor](assets/example_color.png)  
 
 ### Laparoscopic image generation
+
+We fine-tune Stable Diffusion on laparoscopic video frames with action triplet prompts and condition it with segmentation masks to synthesize anatomically realistic surgical scenes. See example ground-truth images and segmentations with generated outputs below.
+
+![ExampleLaparoscopic](assets/example_laparoscopic.png) 
 
 ### FILE STRUCTURE:
     - DMCAF/
