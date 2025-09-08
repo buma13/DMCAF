@@ -210,6 +210,7 @@ evaluator:
     - DICE
 
 ```
+## Configuration Validation
 Use the validation tool to check your configuration:
 
 ```bash
